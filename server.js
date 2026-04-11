@@ -5,12 +5,13 @@ const cron = require('node-cron');
 const { runCheck } = require('./scraper');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const CONFIG_FILE = path.join(__dirname, 'data', 'config.json');
+const PORT = process.env.PORT || 8000;
+const CONFIG_DIR = process.env.CONFIG_DIR || '/config';
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
-// Zorg dat data map bestaat
-if (!fs.existsSync(path.join(__dirname, 'data'))) {
-  fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+// Zorg dat config map bestaat
+if (!fs.existsSync(CONFIG_DIR)) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
 }
 
 // Standaard configuratie

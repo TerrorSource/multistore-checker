@@ -30,22 +30,34 @@ Lightweight Docker container that monitors **Kruidvat NL**, **Kruidvat BE** and 
 
 ## Quick start
 
-### 1. Clone the repository
+### 1. Create a docker-compose.yml
 
-```bash
-git clone https://github.com/<your-username>/multistore-checker.git
-cd multistore-checker
+```yaml
+services:
+  multistore-checker:
+    image: ghcr.io/terrorsource/multistore-checker:latest
+    container_name: multistore-checker
+    restart: unless-stopped
+    network_mode: bridge
+    environment:
+      - TZ=Europe/Amsterdam
+      - PUID=1000
+      - PGID=1000
+    ports:
+      - "9060:8000"
+    volumes:
+      - /path/to/your/config:/config
 ```
 
 ### 2. Start the container
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 ### 3. Open the dashboard
 
-Go to `http://localhost:3000` in your browser. Fill in your Telegram Bot Token and Chat ID, select the sites you want to monitor and click **Opslaan**.
+Go to `http://<your-ip>:9060` in your browser. Fill in your Telegram Bot Token and Chat ID, select the sites you want to monitor and click **Opslaan**.
 
 ### 4. Verify
 
@@ -55,22 +67,18 @@ Click **Test Telegram** to confirm your bot is working, then click **Controleer 
 
 ## Docker Compose
 
-The included `docker-compose.yml`:
+### Parameters
 
-```yaml
-services:
-  multistore-checker:
-    build: .
-    container_name: multistore-checker
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - TZ=Europe/Amsterdam
-      - PORT=3000
-```
+| Parameter | Description |
+|---|---|
+| `image` | `ghcr.io/terrorsource/multistore-checker:latest` |
+| `container_name` | Name of the container |
+| `restart` | Restart policy (`unless-stopped`) |
+| `network_mode` | Network mode (`bridge`) |
+| `TZ` | Timezone (e.g. `Europe/Amsterdam`) |
+| `PUID` / `PGID` | User/group ID for file permissions |
+| `9060:8000` | Maps host port `9060` to container port `8000` |
+| `/config` | Persistent volume for settings (`config.json`) |
 
 ### Customizing
 
@@ -78,27 +86,37 @@ services:
 
 ```yaml
     ports:
-      - "8080:3000"
+      - "3000:8000"
 ```
 
-**Seed initial config** — set defaults via environment variables (only used when no `config.json` exists yet):
+**NAS volume path** — example for QNAP:
 
 ```yaml
-    environment:
-      - TZ=Europe/Amsterdam
-      - PORT=3000
-      - TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
-      - TELEGRAM_CHAT_ID=-1001234567890
-      - CHECK_INTERVAL=360
+    volumes:
+      - /share/CACHEDEV1_DATA/Docker/multistore-checker:/config
 ```
 
-**Data persistence** — the `./data` volume stores `config.json` with all your settings. This file survives container rebuilds and restarts. It is excluded from git via `.gitignore` to prevent leaking your bot token.
+### Building from source
+
+If you want to build the image yourself instead of pulling from GHCR:
+
+```bash
+git clone https://github.com/TerrorSource/multistore-checker.git
+cd multistore-checker
+docker compose up -d --build
+```
+
+Replace the `image` line in your docker-compose.yml with:
+
+```yaml
+    build: .
+```
 
 ---
 
 ## Dashboard
 
-The web dashboard runs on the configured port (default `3000`) and provides:
+The web dashboard runs on the configured port (default `8000` internal, mapped to your chosen host port) and provides:
 
 ### Status bar
 Shows whether the scheduler is active, the time of the last check, and whether a check is currently running.
@@ -147,33 +165,24 @@ The bottom of the dashboard shows a live log of recent activity (checks, results
 
 ## Portainer deployment
 
-### From a Git repository
-
 1. Go to **Stacks > Add stack**
 2. Select **Repository**
-3. Enter the repository URL: `https://github.com/<your-username>/multistore-checker`
+3. Enter the repository URL: `https://github.com/TerrorSource/multistore-checker`
 4. Set **Compose path** to `docker-compose.yml`
-5. If the repo is private: add your GitHub username and a [Personal Access Token](https://github.com/settings/tokens) (with `repo` scope) under **Authentication**
-6. Click **Deploy the stack**
+5. Click **Deploy the stack**
 
-### From the file system
-
-1. Clone the repo on your server
-2. Go to **Stacks > Add stack**
-3. Select **Upload** or **Web editor**
-4. Paste or upload the contents of `docker-compose.yml`
-5. Set the **Stack name** and click **Deploy the stack**
+Or use **Web editor** and paste the docker-compose.yml contents above.
 
 ---
 
 ## How it works
 
-1. For each enabled store, the checker fetches the search results page filtered on products priced between 0 and 0.48 EUR
+1. For each enabled store, the checker fetches the search results page filtered on products priced between 0 and 0.48 EUR (up to 100 results)
 2. The HTML is parsed with **Cheerio** (no headless browser needed) to find products marked "Geen prijs aanwezig"
-3. For each product found, the store's product API is called to retrieve stock level and order availability
+3. For each product found, the store's product API is called to retrieve stock level and order availability (with 500 ms delay between calls)
 4. If the `purchasable` filter is on, only products that can actually be ordered are kept
 5. Results are sent to Telegram with product names as clickable links
-6. A short delay (500 ms between API calls, 2 seconds between sites) keeps requests friendly
+6. A 2-second delay between sites keeps requests friendly
 
 ---
 
@@ -188,12 +197,17 @@ multistore-checker/
 ├── scraper.js           # HTML scraping & Telegram notification logic
 ├── public/
 │   └── index.html       # Web dashboard
-├── data/                # Persistent config (gitignored)
-│   └── config.json
 ├── .gitignore
 ├── .dockerignore
 ├── LICENSE              # MIT
 └── README.md
+```
+
+Persistent data is stored in the `/config` volume mount:
+
+```
+/config/
+└── config.json          # All settings (bot token, chat ID, sites, etc.)
 ```
 
 ---

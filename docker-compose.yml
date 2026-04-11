@@ -1,17 +1,14 @@
 services:
   multistore-checker:
-    build: .
+    image: ghcr.io/terrorsource/multistore-checker:latest
     container_name: multistore-checker
     restart: unless-stopped
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
+    network_mode: bridge
     environment:
       - TZ=Europe/Amsterdam
-      - PORT=3000
-      # Optioneel: stel standaard waarden in via environment variables
-      # Deze worden gebruikt als er nog geen config.json bestaat
-      # - TELEGRAM_BOT_TOKEN=jouw_bot_token
-      # - TELEGRAM_CHAT_ID=jouw_chat_id
-      # - CHECK_INTERVAL=360
+      - PUID=1000
+      - PGID=1000
+    ports:
+      - "9060:8000"
+    volumes:
+      - /share/CACHEDEV1_DATA/Docker/multistore-checker:/config
