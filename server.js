@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const cron = require('node-cron');
 const { runCheck } = require('./scraper');
+const { version: APP_VERSION } = require('./package.json');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -19,7 +20,7 @@ const defaultConfig = {
   botId: process.env.TELEGRAM_BOT_TOKEN || '',
   chatId: process.env.TELEGRAM_CHAT_ID || '',
   interval: parseInt(process.env.CHECK_INTERVAL || '360', 10),
-  onlyPurchasable: true,
+  onlyInStock: true,
   notifyEmpty: false,
   sitesEnabled: ['nl', 'be', 'tp'],
   active: false
@@ -29,6 +30,12 @@ function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      // Migratie 1.4.0 -> 1.5.0: filter 'onlyPurchasable' is vervangen door
+      // 'onlyInStock' (voorraad i.p.v. bestelbaar).
+      if (data.onlyInStock === undefined && data.onlyPurchasable !== undefined) {
+        data.onlyInStock = data.onlyPurchasable;
+      }
+      delete data.onlyPurchasable;
       return { ...defaultConfig, ...data };
     }
   } catch (err) {
@@ -142,7 +149,7 @@ app.post('/api/config', (req, res) => {
   if (updates.botId !== undefined) config.botId = updates.botId;
   if (updates.chatId !== undefined) config.chatId = updates.chatId;
   if (updates.interval !== undefined) config.interval = Math.max(1, parseInt(updates.interval, 10) || 360);
-  if (updates.onlyPurchasable !== undefined) config.onlyPurchasable = Boolean(updates.onlyPurchasable);
+  if (updates.onlyInStock !== undefined) config.onlyInStock = Boolean(updates.onlyInStock);
   if (updates.notifyEmpty !== undefined) config.notifyEmpty = Boolean(updates.notifyEmpty);
   if (updates.sitesEnabled !== undefined) config.sitesEnabled = updates.sitesEnabled;
   if (updates.active !== undefined) config.active = Boolean(updates.active);
@@ -167,7 +174,7 @@ app.post('/api/test-telegram', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: config.chatId,
-        text: '\u2705 Testbericht vanuit de Multistore Docker Checker!'
+        text: `\u2705 Testbericht vanuit de Multistore Docker Checker! (v${APP_VERSION})`
       })
     });
     const data = await response.json();
@@ -183,6 +190,7 @@ app.post('/api/test-telegram', async (req, res) => {
 
 app.get('/api/status', (req, res) => {
   res.json({
+    version: APP_VERSION,
     active: config.active,
     checkRunning,
     lastCheck: lastCheckResult?.timestamp || null,

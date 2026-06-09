@@ -1,0 +1,24 @@
+## Lokale dev/test-compose voor op je eigen machine (bv. Mac arm64).
+## Bouwt de image uit de lokale Dockerfile (= de code in deze map, dus 1.4.0)
+## en bewaart de config in ./config naast dit bestand.
+##
+## Gebruik:
+##   docker compose -f docker-compose.local.yml up --build -d
+##   docker compose -f docker-compose.local.yml logs -f
+##   docker compose -f docker-compose.local.yml down
+##
+## Open daarna het dashboard op http://localhost:9060
+##
+## NB: docker-compose.yml blijft de productie/NAS-config (pullt de GHCR-image).
+
+services:
+  multistore-checker:
+    build: .
+    container_name: multistore-checker
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Amsterdam
+    ports:
+      - "9060:8000"
+    volumes:
+      - ./config:/config

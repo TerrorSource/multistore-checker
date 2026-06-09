@@ -14,9 +14,9 @@ Lightweight Docker container that monitors **Kruidvat NL**, **Kruidvat BE** and 
 - Telegram notifications with product name, direct link, stock level and order status
 - Web dashboard for all configuration and manual checks
 - Configurable check interval (minutes)
-- Filter to only show orderable products (`purchasable`)
+- Filter to only show in-stock products (`onlyInStock`; Trekpleister stock is unknown and always included)
 - Optional notification when 0 products are found
-- Built-in request delays between sites and API calls to avoid rate limiting
+- Built-in request delays between sites to avoid rate limiting
 - Tiny footprint: ~50 MB image, ~30 MB RAM — no headless browser needed
 
 ---
@@ -134,7 +134,7 @@ Shows whether the scheduler is active, the time of the last check, and whether a
 |---|---|---|
 | **Automatisch checken** | Enable/disable the automatic scheduler | Off |
 | **Check-interval** | Minutes between automatic checks | `360` (6 hours) |
-| **Alleen bestelbaar** | Only report products that can actually be ordered | Yes |
+| **Alleen producten op voorraad** | Only report in-stock products (Kruidvat); Trekpleister stock is unknown and always included | Yes |
 | **Bericht bij 0 producten** | Send a message even when no products are found | No |
 | **Sites** | Which stores to monitor | All three |
 
@@ -177,12 +177,17 @@ Or use **Web editor** and paste the docker-compose.yml contents above.
 
 ## How it works
 
+The three stores no longer share a single page format, so the checker uses the
+right strategy per store (no headless browser needed in either case):
+
 1. For each enabled store, the checker fetches the search results page filtered on products priced between 0 and 0.48 EUR (up to 100 results)
-2. The HTML is parsed with **Cheerio** (no headless browser needed) to find products marked "Geen prijs aanwezig"
-3. For each product found, the store's product API is called to retrieve stock level and order availability (with 500 ms delay between calls)
-4. If the `purchasable` filter is on, only products that can actually be ordered are kept
+2. **Kruidvat NL & BE** now run on SAP **Spartacus** (Angular). The product data is server-side rendered and embedded in the page as JSON inside `<script id="spartacus-app-state">`. The checker parses that JSON and keeps the products with a price of € 0,00 — including stock level and order status, which are already present (no extra API call needed). Note: Kruidvat BE uses a `/nl/` locale prefix.
+3. **Trekpleister** has not migrated and still serves the older HTML layout. It is parsed with **Cheerio**, looking for tiles marked "Geen prijs aanwezig"; code, name, link and stock status are read from the tile's `e2-impression-tracker` data attributes.
+4. If the `onlyInStock` filter is on, only in-stock products are kept (Kruidvat has reliable stock; Trekpleister stock cannot be scraped reliably, so those are marked "onbekend" and always kept)
 5. Results are sent to Telegram with product names as clickable links
 6. A 2-second delay between sites keeps requests friendly
+
+> **Why no product API anymore?** The old per-product OCC API (`/api/v2/...`, now on `api.kruidvat.nl`) is shielded by Akamai Bot Manager and returns `403`/Access Denied to server-side requests. Stock and availability are taken from the search page itself instead.
 
 ---
 

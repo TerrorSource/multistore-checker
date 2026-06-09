@@ -1,35 +1,51 @@
 const cheerio = require('cheerio');
 
+// Zoekfilter: producten met een verkoopprijs tussen 0 en 0.48 EUR
+// (de "Geen prijs aanwezig" / gratis producten staan hier tussen).
+const QUERY = ':price-asc:salePriceRange:0%20TO%200.48';
+
 const siteConfigs = {
+  // Kruidvat NL & BE draaien sinds 2025 op het nieuwe Spartacus-platform
+  // (Angular Universal). De productdata wordt server-side gerenderd en in de
+  // pagina meegestuurd als JSON in <script id="spartacus-app-state">.
+  // De losse OCC product-API (api.kruidvat.nl) zit achter Akamai Bot Manager
+  // en is niet meer rechtstreeks bruikbaar; dat is ook niet meer nodig omdat
+  // voorraad + bestelbaarheid al in de app-state staan.
   nl: {
     key: 'nl',
     displayName: 'Kruidvat NL',
     domain: 'https://www.kruidvat.nl',
-    checkUrl: 'https://www.kruidvat.nl/search?q=%3A%3AsalePriceRange%3A0%2BTO%2B0.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc',
-    apiBase: 'https://www.kruidvat.nl/api/v2/kvn/products/'
+    platform: 'spartacus',
+    checkUrl: `https://www.kruidvat.nl/search/:price-asc?query=${QUERY}&pageSize=100&sortCode=price-asc`
   },
   be: {
     key: 'be',
     displayName: 'Kruidvat BE',
     domain: 'https://www.kruidvat.be',
-    checkUrl: 'https://www.kruidvat.be/search?q=%3A%3AsalePriceRange%3A0%2BTO%2B0.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc',
-    apiBase: 'https://www.kruidvat.be/api/v2/kvb/products/'
+    platform: 'spartacus',
+    // BE heeft nu een /nl/ locale-prefix (anders volgt een 301-redirect).
+    checkUrl: `https://www.kruidvat.be/nl/search/:price-asc?query=${QUERY}&pageSize=100&sortCode=price-asc`
   },
+  // Trekpleister is (nog) NIET gemigreerd en gebruikt de oude HTML-structuur
+  // met .product__list-col / .pricebadge--empty-price. De productgegevens
+  // (code, naam, link, voorraadstatus) staan in de data-attributen van de
+  // <e2-impression-tracker> in elke tegel.
   tp: {
     key: 'tp',
     displayName: 'Trekpleister NL',
     domain: 'https://www.trekpleister.nl',
-    checkUrl: 'https://www.trekpleister.nl/search?q=%3A%3AsalePriceRange%3A0%2BTO%2B0.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc',
-    apiBase: 'https://www.trekpleister.nl/api/v2/kvtp/products/'
+    platform: 'legacy',
+    checkUrl: 'https://www.trekpleister.nl/search?q=%3A%3AsalePriceRange%3A0%2BTO%2B0.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc'
   }
 };
 
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'Accept-Encoding': 'identity',
-  'Connection': 'keep-alive',
+  'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"macOS"',
   'Upgrade-Insecure-Requests': '1',
   'Sec-Fetch-Dest': 'document',
   'Sec-Fetch-Mode': 'navigate',
@@ -43,27 +59,118 @@ function escapeHTML(text) {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-async function fetchProductDetails(code, apiBase) {
+// --- Spartacus (Kruidvat NL/BE) ------------------------------------------
+
+// Spartacus serialiseert de app-state met een eigen escaping in plaats van
+// HTML-entities: &q; -> "  &l; -> <  &g; -> >  &s; -> '  &a; -> &
+function unescapeSpartacusState(s) {
+  return s
+    .replace(/&q;/g, '"')
+    .replace(/&l;/g, '<')
+    .replace(/&g;/g, '>')
+    .replace(/&s;/g, "'")
+    .replace(/&a;/g, '&');
+}
+
+function extractSpartacusState(html) {
+  const m = html.match(/<script id="spartacus-app-state"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return null;
   try {
-    const res = await fetch(`${apiBase}${code}/`, { headers: BROWSER_HEADERS });
-    const data = await res.json();
-    let stockLevel = null;
-    const opts = data.baseOptions?.[0]?.options;
-    if (opts) {
-      for (const o of opts) {
-        if (o.code === code && o.stock) {
-          stockLevel = o.stock.stockLevel;
-          break;
-        }
-      }
-    }
-    const available = Boolean(data.availableForPickup);
-    const purchasable = Boolean(data.purchasable);
-    return { stockLevel, available, purchasable };
+    return JSON.parse(unescapeSpartacusState(m[1]));
   } catch {
-    return { stockLevel: null, available: false, purchasable: false };
+    return null;
   }
 }
+
+// De app-state-sleutel is niet stabiel (bv. "e2-breadcrumb-pageBreadCrumbs$"),
+// dus zoeken we generiek naar het zoekresultaat-model.
+function findSearchModel(state) {
+  let found = null;
+  (function walk(o) {
+    if (found || !o || typeof o !== 'object') return;
+    if (o.searchModel && Array.isArray(o.searchModel.products)) { found = o.searchModel; return; }
+    if (Array.isArray(o.products) && o.pagination && o.facets) { found = o; return; }
+    for (const k of Object.keys(o)) walk(o[k]);
+  })(state);
+  return found;
+}
+
+function scrapeSpartacus(html, site) {
+  const state = extractSpartacusState(html);
+  if (!state) {
+    console.error(`${site.displayName}: spartacus-app-state niet gevonden (sitestructuur gewijzigd?).`);
+    return [];
+  }
+  const model = findSearchModel(state);
+  if (!model) {
+    console.error(`${site.displayName}: zoekresultaten niet gevonden in app-state.`);
+    return [];
+  }
+
+  return model.products
+    .filter(p => p.price && p.price.value === 0)
+    .map(p => {
+      let link = p.url || '#';
+      if (!link.startsWith('http')) link = site.domain + link;
+      // LET OP: gebruik inStockFlag, NIET stock.stockLevelStatus/stockLevel.
+      // Die laatste is magazijndata en kan misleidend "inStock"/>0 zijn terwijl
+      // het product op de site "Niet op voorraad" is. inStockFlag komt wél
+      // overeen met de echte online-beschikbaarheid.
+      const inStock = (typeof p.inStockFlag === 'boolean')
+        ? p.inStockFlag
+        : (p.stock && p.stock.stockLevelStatus
+            ? p.stock.stockLevelStatus !== 'outOfStock'
+            : null);
+      return {
+        name: p.name || 'Onbekend',
+        link,
+        code: p.code || 'onbekend',
+        stockLevel: p.stock ? p.stock.stockLevel : null,
+        stockStatus: p.stock ? p.stock.stockLevelStatus : null,
+        inStock
+      };
+    });
+}
+
+// --- Legacy (Trekpleister) -----------------------------------------------
+
+function scrapeLegacy(html, site) {
+  const $ = cheerio.load(html);
+  const products = [];
+
+  $('.product__list-col').each((_, el) => {
+    const $el = $(el);
+    const badge = $el.find('.pricebadge--empty-price');
+    if (!(badge.length && badge.text().includes('Geen prijs aanwezig'))) return;
+
+    const tracker = $el.find('e2-impression-tracker');
+    const code = tracker.attr('data-code') || 'onbekend';
+    let link = tracker.attr('data-item-url')
+      || $el.find('a.tile__product-slide-link').attr('href')
+      || '#';
+    if (!link.startsWith('http')) link = site.domain + link;
+    const name = tracker.attr('data-item-name')
+      || $el.find('.tile__product-slide-product-name').text().trim()
+      || 'Onbekend';
+    // Voorraadstatus uit het server-side gerenderde data-item-in-stock
+    // attribuut ('inStock' | 'outOfStock' | 'lowStock' ...). Dit is consistent
+    // met de bestelbaarheid op de zoekpagina (de add-to-cart krijgt server-side
+    // het 'out-of-stock'-attribuut), dus betrouwbaar genoeg om op te filteren.
+    const status = tracker.attr('data-item-in-stock') || null;
+    products.push({
+      name,
+      link,
+      code,
+      stockLevel: null,
+      stockStatus: status,
+      inStock: status ? status !== 'outOfStock' : null
+    });
+  });
+
+  return products;
+}
+
+// --- Gemeenschappelijk ----------------------------------------------------
 
 async function scrapeSite(site) {
   try {
@@ -78,27 +185,9 @@ async function scrapeSite(site) {
     }
 
     const html = await res.text();
-    const $ = cheerio.load(html);
-    const products = [];
-
-    $('.product__list-col').each((_, el) => {
-      const $el = $(el);
-      const badge = $el.find('.pricebadge--empty-price');
-      if (badge.length && badge.text().includes('Geen prijs aanwezig')) {
-        const nameEl = $el.find('.tile__product-slide-product-name');
-        const linkEl = $el.find('a.tile__product-slide-link');
-        let link = linkEl.attr('href') || '#';
-        if (!link.startsWith('http')) link = site.domain + link;
-        const code = $el.find('e2-impression-tracker').attr('data-code') || 'onbekend';
-        products.push({
-          name: nameEl.text().trim() || 'Onbekend',
-          link,
-          code
-        });
-      }
-    });
-
-    return products;
+    return site.platform === 'spartacus'
+      ? scrapeSpartacus(html, site)
+      : scrapeLegacy(html, site);
   } catch (err) {
     console.error(`Fout bij scrapen van ${site.displayName}:`, err.message);
     return [];
@@ -119,8 +208,16 @@ async function sendTelegram(botId, chatId, text, parseMode = null) {
   }
 }
 
+// Leesbare voorraad voor in het Telegram-bericht. Gebaseerd op inStock
+// (echte beschikbaarheid), niet op het misleidende stockLevel-getal.
+function stockText(p) {
+  if (p.inStock === true) return 'op voorraad';
+  if (p.inStock === false) return 'niet op voorraad';
+  return 'onbekend';
+}
+
 async function runCheck(config, isManual = false) {
-  const { botId, chatId, onlyPurchasable, notifyEmpty, sitesEnabled } = config;
+  const { botId, chatId, onlyInStock, notifyEmpty, sitesEnabled } = config;
   if (!botId || !chatId) {
     console.log('Bot ID of Chat ID ontbreekt, check overgeslagen.');
     return { success: false, error: 'Bot ID of Chat ID ontbreekt' };
@@ -133,20 +230,16 @@ async function runCheck(config, isManual = false) {
     if (!site) continue;
 
     console.log(`Scannen: ${site.displayName}...`);
+    // Voorraad komt nu rechtstreeks uit de zoekpagina (bij Kruidvat),
+    // dus per-product API-calls (en de bijbehorende vertragingen) zijn weg.
     const products = await scrapeSite(site);
 
-    // Haal details op voor elk product (met korte pauze tussen requests)
-    const enriched = [];
-    for (const p of products) {
-      const details = await fetchProductDetails(p.code, site.apiBase);
-      enriched.push({ ...p, ...details });
-      await delay(500);
-    }
-
-    // Filter op purchasable indien nodig
-    const filtered = onlyPurchasable
-      ? enriched.filter(p => p.purchasable)
-      : enriched;
+    // Filter op voorraad indien nodig. inStock: true = op voorraad,
+    // false = uitverkocht, null = onbekend (Trekpleister). We houden 'op
+    // voorraad' én 'onbekend' aan, zodat we geen Trekpleister-treffer missen.
+    const filtered = onlyInStock
+      ? products.filter(p => p.inStock !== false)
+      : products;
 
     const siteResult = {
       site: site.displayName,
@@ -164,14 +257,12 @@ async function runCheck(config, isManual = false) {
     if (filtered.length === 0) {
       if (isManual || notifyEmpty) {
         await sendTelegram(botId, chatId,
-          `\u2705 ${site.displayName}: geen producten gevonden conform filter.`);
+          `✅ ${site.displayName}: geen producten gevonden conform filter.`);
       }
     } else {
       let message = `${site.displayName}: ${filtered.length} producten zonder prijs:\n\n`;
       filtered.forEach(p => {
-        const stock = p.stockLevel != null ? p.stockLevel : 'onbekend';
-        const availText = p.purchasable ? 'ja' : 'nee';
-        message += `\u2022 <a href="${p.link}">${escapeHTML(p.name)}</a> (voorraad: ${stock})(bestelbaar: ${availText})\n`;
+        message += `• <a href="${p.link}">${escapeHTML(p.name)}</a> (voorraad: ${stockText(p)})\n`;
       });
       await sendTelegram(botId, chatId, message, 'HTML');
     }
