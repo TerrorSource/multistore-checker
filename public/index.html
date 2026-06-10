@@ -105,6 +105,8 @@
       min-width: 0;
     }
     .target-row input:focus { outline: none; border-color: #e94560; }
+    .target-row input.saved { border-color: #4ecca3; }
+    .target-row input.saved::placeholder { color: #4ecca3; opacity: 0.8; }
     .target-row .t-bot { flex: 3; }
     .target-row .t-chat { flex: 2; }
     .target-row .btn-remove {
@@ -385,7 +387,15 @@
       bot.type = 'text';
       bot.className = 't-bot';
       bot.autocomplete = 'off';
-      bot.placeholder = (target && target.botIdMasked) ? target.botIdMasked : '123456:ABC-DEF...';
+      if (target && target.botIdMasked) {
+        // Token staat server-side opgeslagen: maak dat expliciet zichtbaar,
+        // anders oogt het lege veld als "niet opgeslagen".
+        bot.placeholder = `✓ Opgeslagen: ${target.botIdMasked} — leeg laten = behouden`;
+        bot.classList.add('saved');
+        bot.title = 'Er is een token opgeslagen voor deze ontvanger. Vul alleen iets in om het te vervangen.';
+      } else {
+        bot.placeholder = '123456:ABC-DEF...';
+      }
 
       const chat = document.createElement('input');
       chat.type = 'text';
@@ -398,17 +408,23 @@
       del.className = 'btn-remove';
       del.textContent = '✕';
       del.title = 'Ontvanger verwijderen';
-      del.addEventListener('click', () => row.remove());
+      del.addEventListener('click', () => { row.remove(); targetsDirty = true; });
 
       row.append(bot, chat, del);
       document.getElementById('targetsContainer').appendChild(row);
     }
+
+    // Niet-opgeslagen invoer mag nooit door een achtergrond-render gewist
+    // worden; renderTargets() draait daarom alleen als er niets getypt is
+    // (of direct na een geslaagde save, die de invoer juist verwerkt heeft).
+    let targetsDirty = false;
 
     function renderTargets(targets) {
       const c = document.getElementById('targetsContainer');
       c.innerHTML = '';
       targets.forEach((t, i) => addTargetRow(t, i));
       if (targets.length === 0) addTargetRow();
+      targetsDirty = false;
     }
 
     function collectTargets() {
@@ -462,7 +478,9 @@
       if (serverDown) {
         serverDown = false;
         showToast('Verbinding hersteld', 'success');
-        loadConfig();
+        // Niet herladen terwijl de gebruiker in de ontvanger-velden typt,
+        // anders raakt niet-opgeslagen invoer kwijt.
+        if (!targetsDirty) loadConfig();
       }
       if (s.version) document.getElementById('appVersion').textContent = 'v' + s.version;
       const activeEl = document.getElementById('statusActive');
@@ -516,13 +534,15 @@
         const data = await res.json();
         if (data.success) {
           showToast('Instellingen opgeslagen!', 'success');
+          // Alleen bij succes herladen: de rijen tonen dan "✓ Opgeslagen".
+          // Bij een fout blijft de invoer staan zodat niets verloren gaat.
+          loadConfig();
         } else {
           showToast('Opslaan mislukt: ' + (data.error || 'onbekende fout'), 'error');
         }
       } catch (err) {
         showToast('Opslaan mislukt: server niet bereikbaar', 'error');
       }
-      loadConfig();
       loadStatus();
     });
 
@@ -552,7 +572,7 @@
     });
 
     // Ontvanger toevoegen
-    document.getElementById('btnAddTarget').addEventListener('click', () => addTargetRow());
+    document.getElementById('btnAddTarget').addEventListener('click', () => { addTargetRow(); targetsDirty = true; });
 
     // Test Telegram (alle ontvangers)
     document.getElementById('btnTestTelegram').addEventListener('click', async () => {
@@ -571,6 +591,9 @@
     });
 
     // Init
+    // Elke toetsaanslag in de ontvanger-velden markeert ze als 'dirty'
+    document.getElementById('targetsContainer').addEventListener('input', () => { targetsDirty = true; });
+
     loadConfig();
     loadStatus();
     setInterval(loadStatus, 15000);

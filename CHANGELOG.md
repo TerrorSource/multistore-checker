@@ -5,6 +5,18 @@ bij ingrijpende/brekende wijzigingen). De actieve versie staat in de
 projectroot als map `<versienummer>/`; oudere versies worden gearchiveerd in
 `../_oldversions/<versienummer>/`.
 
+## [1.11.0] — 2026-06-10
+
+### Opgelost
+- Na het opslaan van een Telegram-ontvanger oogde het token-veld als "niet
+  opgeslagen" (het veld wordt bewust geleegd omdat tokens nooit terug naar de
+  browser gaan). Rijen met een opgeslagen token tonen nu duidelijk
+  "✓ Opgeslagen: 123456...XYZ — leeg laten = behouden" in groen.
+- Bij een mislukte save (validatiefout) werd de ingevulde token/chat-ID-invoer
+  gewist; de invoer blijft nu staan zodat niets verloren gaat.
+- Een achtergrond-herlading (bv. "Verbinding hersteld") wist niet langer
+  ontvanger-velden waar de gebruiker nog in aan het typen is.
+
 ## [1.10.0] — 2026-06-10
 
 ### Toegevoegd
