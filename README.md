@@ -11,10 +11,11 @@ Lightweight Docker container that monitors **Kruidvat NL**, **Kruidvat BE** and 
 ## Features
 
 - Monitors three A.S. Watson stores for free / no-price products
-- Telegram notifications with product name, direct link, stock level and order status
+- Telegram notifications with product name, direct link and stock status (long lists are split to respect Telegram's 4096-char limit)
 - Web dashboard for all configuration and manual checks
 - Configurable check interval (minutes)
-- Filter to only show in-stock products (`onlyInStock`; Trekpleister stock is unknown and always included)
+- Filter to only show in-stock products (`onlyInStock`; products with unknown stock are always included)
+- Optional "only new products" mode (`onlyNew`): scheduled checks only report products not reported before (remembered in `/config/seen.json`, forgotten after a configurable number of days of absence, default 7); manual checks always show everything with a 🆕 marker
 - Optional notification when 0 products are found
 - Built-in request delays between sites to avoid rate limiting
 - Tiny footprint: ~50 MB image, ~30 MB RAM — no headless browser needed
@@ -57,7 +58,7 @@ docker compose up -d
 
 ### 3. Open the dashboard
 
-Go to `http://<your-ip>:9060` in your browser. Fill in your Telegram Bot Token and Chat ID, select the sites you want to monitor and click **Opslaan**.
+Go to `http://<your-ip>:9060` in your browser. Fill in one or more Telegram Bot Token / Chat ID pairs, select the sites you want to monitor and click **Opslaan**.
 
 ### 4. Verify
 
@@ -123,10 +124,17 @@ Shows whether the scheduler is active, the time of the last check, and whether a
 
 ### Telegram settings
 
+Multiple recipients are supported: add as many bot-token/chat-ID rows as you
+like with **+ Ontvanger toevoegen** — every notification and test message is
+sent to all of them. Remove a row with ✕.
+
 | Field | Description |
 |---|---|
-| **Bot Token** | Your Telegram bot token from @BotFather |
+| **Bot Token** | Your Telegram bot token from @BotFather. Saved tokens are never sent back to the browser (a masked version is shown as placeholder); leave the field empty to keep the stored token |
 | **Chat ID** | The chat or group ID to send notifications to |
+
+Existing configs with a single `botId`/`chatId` are migrated automatically to
+the first recipient row (`telegramTargets` in `config.json`).
 
 ### Scan settings
 
@@ -134,7 +142,9 @@ Shows whether the scheduler is active, the time of the last check, and whether a
 |---|---|---|
 | **Automatisch checken** | Enable/disable the automatic scheduler | Off |
 | **Check-interval** | Minutes between automatic checks | `360` (6 hours) |
-| **Alleen producten op voorraad** | Only report in-stock products (Kruidvat); Trekpleister stock is unknown and always included | Yes |
+| **Alleen producten op voorraad** | Only report in-stock products; products with unknown stock status are always included | Yes |
+| **Alleen nieuwe producten melden** | Scheduled checks only report products not reported before; manual checks always show everything (new items get a 🆕 marker) | No |
+| **Opnieuw melden na afwezigheid van (dagen)** | A product that has been absent from the results for this many days is reported as new again (`onlyNewDays`, minimum 1) | `7` |
 | **Bericht bij 0 producten** | Send a message even when no products are found | No |
 | **Sites** | Which stores to monitor | All three |
 
@@ -183,9 +193,10 @@ right strategy per store (no headless browser needed in either case):
 1. For each enabled store, the checker fetches the search results page filtered on products priced between 0 and 0.48 EUR (up to 100 results)
 2. **Kruidvat NL & BE** now run on SAP **Spartacus** (Angular). The product data is server-side rendered and embedded in the page as JSON inside `<script id="spartacus-app-state">`. The checker parses that JSON and keeps the products with a price of € 0,00 — including stock level and order status, which are already present (no extra API call needed). Note: Kruidvat BE uses a `/nl/` locale prefix.
 3. **Trekpleister** has not migrated and still serves the older HTML layout. It is parsed with **Cheerio**, looking for tiles marked "Geen prijs aanwezig"; code, name, link and stock status are read from the tile's `e2-impression-tracker` data attributes.
-4. If the `onlyInStock` filter is on, only in-stock products are kept (Kruidvat has reliable stock; Trekpleister stock cannot be scraped reliably, so those are marked "onbekend" and always kept)
-5. Results are sent to Telegram with product names as clickable links
-6. A 2-second delay between sites keeps requests friendly
+4. If the `onlyInStock` filter is on, only in-stock products are kept (Kruidvat via `inStockFlag` in the app state; Trekpleister via the `data-item-in-stock` attribute); products with unknown status are always kept
+5. With `onlyNew` enabled, scheduled checks only report products that have not been reported before (tracked per store in `/config/seen.json`)
+6. Results are sent to Telegram with product names as clickable links; lists longer than Telegram's 4096-character limit are split into multiple messages
+7. A 2-second delay between sites keeps requests friendly
 
 > **Why no product API anymore?** The old per-product OCC API (`/api/v2/...`, now on `api.kruidvat.nl`) is shielded by Akamai Bot Manager and returns `403`/Access Denied to server-side requests. Stock and availability are taken from the search page itself instead.
 
@@ -197,7 +208,8 @@ right strategy per store (no headless browser needed in either case):
 multistore-checker/
 ├── Dockerfile           # Node 20 Alpine image
 ├── docker-compose.yml   # Container orchestration
-├── package.json         # Dependencies (cheerio, express, node-cron)
+├── package.json         # Dependencies (cheerio, express)
+├── package-lock.json    # Locked dependency tree (reproducible builds)
 ├── server.js            # Express server, scheduler, API endpoints
 ├── scraper.js           # HTML scraping & Telegram notification logic
 ├── public/
@@ -212,7 +224,8 @@ Persistent data is stored in the `/config` volume mount:
 
 ```
 /config/
-└── config.json          # All settings (bot token, chat ID, sites, etc.)
+├── config.json          # All settings (bot token, chat ID, sites, etc.)
+└── seen.json            # Previously reported products (for the onlyNew filter)
 ```
 
 ---
@@ -224,7 +237,6 @@ Persistent data is stored in the `/config` volume mount:
 | **Node.js 20 Alpine** | Runtime (~50 MB image) |
 | **Express** | Web dashboard & REST API |
 | **Cheerio** | Fast HTML parsing without a browser |
-| **node-cron** | Cron-based scheduling |
 | **Telegram Bot API** | Push notifications |
 
 ---

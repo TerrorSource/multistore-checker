@@ -79,6 +79,47 @@
       border-color: #e94560;
     }
 
+    .target-head {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+    .target-head span:nth-child(1) { flex: 3; }
+    .target-head span:nth-child(2) { flex: 2; }
+    .target-head span:nth-child(3) { width: 36px; }
+    .target-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .target-row input {
+      padding: 10px 12px;
+      background: #0f3460;
+      border: 1px solid #233;
+      border-radius: 6px;
+      color: #eee;
+      font-size: 14px;
+      min-width: 0;
+    }
+    .target-row input:focus { outline: none; border-color: #e94560; }
+    .target-row .t-bot { flex: 3; }
+    .target-row .t-chat { flex: 2; }
+    .target-row .btn-remove {
+      width: 36px;
+      height: 38px;
+      flex: none;
+      background: #0f3460;
+      border: 1px solid #444;
+      border-radius: 6px;
+      color: #e94560;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .target-row .btn-remove:hover { background: #e94560; color: #fff; }
+
     .checkbox-group {
       display: flex;
       gap: 16px;
@@ -237,14 +278,12 @@
     <div class="card">
       <h2>Telegram instellingen</h2>
       <div class="form-group">
-        <label>Bot Token</label>
-        <input type="text" id="botId" placeholder="123456:ABC-DEF...">
-      </div>
-      <div class="form-group">
-        <label>Chat ID</label>
-        <input type="text" id="chatId" placeholder="-1001234567890">
+        <label>Ontvangers — elk bericht gaat naar alle regels (token leeg laten = opgeslagen token behouden)</label>
+        <div class="target-head"><span>Bot Token</span><span>Chat ID</span><span></span></div>
+        <div id="targetsContainer"></div>
       </div>
       <div class="btn-row">
+        <button class="btn btn-secondary" id="btnAddTarget">+ Ontvanger toevoegen</button>
         <button class="btn btn-secondary" id="btnTestTelegram">Test Telegram</button>
       </div>
     </div>
@@ -266,9 +305,20 @@
       <div class="form-group">
         <label>Alleen producten op voorraad</label>
         <select id="onlyInStock">
-          <option value="true">Ja (alleen op voorraad; Trekpleister altijd)</option>
+          <option value="true">Ja (alleen op voorraad; status onbekend telt mee)</option>
           <option value="false">Nee (alle producten)</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label>Alleen nieuwe producten melden</label>
+        <select id="onlyNew">
+          <option value="false">Nee (elke check alle gevonden producten)</option>
+          <option value="true">Ja (alleen nog niet eerder gemelde producten)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Opnieuw melden na afwezigheid van (dagen)</label>
+        <input type="number" id="onlyNewDays" min="1" value="7" style="max-width:150px">
       </div>
       <div class="form-group">
         <label>Bericht bij 0 producten</label>
@@ -304,6 +354,11 @@
   <div class="toast" id="toast"></div>
 
   <script>
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     function showToast(msg, type = 'info') {
       const t = document.getElementById('toast');
       t.textContent = msg;
@@ -317,23 +372,98 @@
       return d.toLocaleString('nl-NL', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
     }
 
-    async function loadConfig() {
-      const res = await fetch('/api/config');
-      const cfg = await res.json();
-      document.getElementById('botId').value = cfg.botId || '';
-      document.getElementById('chatId').value = cfg.chatId || '';
-      document.getElementById('active').checked = cfg.active;
-      document.getElementById('interval').value = cfg.interval;
-      document.getElementById('onlyInStock').value = String(cfg.onlyInStock);
-      document.getElementById('notifyEmpty').value = String(cfg.notifyEmpty || false);
-      document.getElementById('site-nl').checked = cfg.sitesEnabled.includes('nl');
-      document.getElementById('site-be').checked = cfg.sitesEnabled.includes('be');
-      document.getElementById('site-tp').checked = cfg.sitesEnabled.includes('tp');
+    // --- Telegram-ontvangers (meerdere bot/chat-paren) ---
+    // Tokens komen nooit mee van de server; bestaande rijen tonen de
+    // gemaskeerde versie als placeholder en onthouden via data-keep welke
+    // server-entry hun token levert zolang het veld leeg blijft.
+    function addTargetRow(target = null, keepIndex = null) {
+      const row = document.createElement('div');
+      row.className = 'target-row';
+      row.dataset.keep = keepIndex === null ? '' : String(keepIndex);
+
+      const bot = document.createElement('input');
+      bot.type = 'text';
+      bot.className = 't-bot';
+      bot.autocomplete = 'off';
+      bot.placeholder = (target && target.botIdMasked) ? target.botIdMasked : '123456:ABC-DEF...';
+
+      const chat = document.createElement('input');
+      chat.type = 'text';
+      chat.className = 't-chat';
+      chat.placeholder = '-1001234567890';
+      chat.value = (target && target.chatId) || '';
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn-remove';
+      del.textContent = '✕';
+      del.title = 'Ontvanger verwijderen';
+      del.addEventListener('click', () => row.remove());
+
+      row.append(bot, chat, del);
+      document.getElementById('targetsContainer').appendChild(row);
     }
 
+    function renderTargets(targets) {
+      const c = document.getElementById('targetsContainer');
+      c.innerHTML = '';
+      targets.forEach((t, i) => addTargetRow(t, i));
+      if (targets.length === 0) addTargetRow();
+    }
+
+    function collectTargets() {
+      const out = [];
+      document.querySelectorAll('#targetsContainer .target-row').forEach(row => {
+        const botVal = row.querySelector('.t-bot').value.trim();
+        const chatVal = row.querySelector('.t-chat').value.trim();
+        const keep = row.dataset.keep;
+        if (!botVal && !chatVal && keep === '') return; // lege nieuwe rij overslaan
+        const t = { chatId: chatVal };
+        if (botVal) t.botId = botVal;
+        if (keep !== '') t.keepIndex = parseInt(keep, 10);
+        out.push(t);
+      });
+      return out;
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const cfg = await res.json();
+        renderTargets(cfg.telegramTargets || []);
+        document.getElementById('active').checked = cfg.active;
+        document.getElementById('interval').value = cfg.interval;
+        document.getElementById('onlyInStock').value = String(cfg.onlyInStock);
+        document.getElementById('onlyNew').value = String(cfg.onlyNew || false);
+        document.getElementById('onlyNewDays').value = cfg.onlyNewDays || 7;
+        document.getElementById('notifyEmpty').value = String(cfg.notifyEmpty || false);
+        document.getElementById('site-nl').checked = cfg.sitesEnabled.includes('nl');
+        document.getElementById('site-be').checked = cfg.sitesEnabled.includes('be');
+        document.getElementById('site-tp').checked = cfg.sitesEnabled.includes('tp');
+      } catch (err) {
+        showToast('Instellingen laden mislukt: server niet bereikbaar', 'error');
+      }
+    }
+
+    let serverDown = false;
     async function loadStatus() {
-      const res = await fetch('/api/status');
-      const s = await res.json();
+      let s;
+      try {
+        const res = await fetch('/api/status');
+        s = await res.json();
+      } catch (err) {
+        if (!serverDown) showToast('Server niet bereikbaar', 'error');
+        serverDown = true;
+        const activeEl = document.getElementById('statusActive');
+        activeEl.textContent = 'Offline';
+        activeEl.className = 'value inactive';
+        return;
+      }
+      if (serverDown) {
+        serverDown = false;
+        showToast('Verbinding hersteld', 'success');
+        loadConfig();
+      }
       if (s.version) document.getElementById('appVersion').textContent = 'v' + s.version;
       const activeEl = document.getElementById('statusActive');
       activeEl.textContent = s.active ? 'Actief' : 'Inactief';
@@ -346,7 +476,7 @@
         const grid = document.getElementById('resultsGrid');
         grid.innerHTML = s.lastResults.map(r =>
           `<div class="result-item">
-            <span class="site-name">${r.site}</span>
+            <span class="site-name">${esc(r.site)}</span>
             <span class="count ${r.found === 0 ? 'zero' : ''}">${r.found} producten</span>
           </div>`
         ).join('');
@@ -355,7 +485,7 @@
       // Logs
       const logC = document.getElementById('logContainer');
       logC.innerHTML = s.logs.map(l =>
-        `<div class="log-entry"><span class="log-time">${formatTime(l.time)}</span> <span class="log-msg">${l.message}</span></div>`
+        `<div class="log-entry"><span class="log-time">${formatTime(l.time)}</span> <span class="log-msg">${esc(l.message)}</span></div>`
       ).join('');
     }
 
@@ -367,21 +497,32 @@
       if (document.getElementById('site-tp').checked) sites.push('tp');
 
       const body = {
-        botId: document.getElementById('botId').value,
-        chatId: document.getElementById('chatId').value,
+        telegramTargets: collectTargets(),
         active: document.getElementById('active').checked,
         interval: parseInt(document.getElementById('interval').value, 10),
         onlyInStock: document.getElementById('onlyInStock').value === 'true',
+        onlyNew: document.getElementById('onlyNew').value === 'true',
+        onlyNewDays: parseInt(document.getElementById('onlyNewDays').value, 10) || 7,
         notifyEmpty: document.getElementById('notifyEmpty').value === 'true',
         sitesEnabled: sites
       };
 
-      await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      showToast('Instellingen opgeslagen!', 'success');
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Instellingen opgeslagen!', 'success');
+        } else {
+          showToast('Opslaan mislukt: ' + (data.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Opslaan mislukt: server niet bereikbaar', 'error');
+      }
+      loadConfig();
       loadStatus();
     });
 
@@ -392,28 +533,40 @@
       btn.textContent = 'Bezig...';
       showToast('Handmatige check gestart...', 'info');
 
-      const res = await fetch('/api/check', { method: 'POST' });
-      const result = await res.json();
-
-      btn.disabled = false;
-      btn.textContent = 'Controleer nu';
-      if (result.success) {
-        const total = result.results.reduce((s, r) => s + r.afterFilter, 0);
-        showToast(`Check voltooid: ${total} producten gevonden`, 'success');
-      } else {
-        showToast('Check mislukt: ' + (result.error || 'onbekende fout'), 'error');
+      try {
+        const res = await fetch('/api/check', { method: 'POST' });
+        const result = await res.json();
+        if (result.success) {
+          const total = result.results.reduce((s, r) => s + r.afterFilter, 0);
+          showToast(`Check voltooid: ${total} producten gevonden`, 'success');
+        } else {
+          showToast('Check mislukt: ' + (result.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Check mislukt: server niet bereikbaar', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Controleer nu';
       }
       loadStatus();
     });
 
-    // Test Telegram
+    // Ontvanger toevoegen
+    document.getElementById('btnAddTarget').addEventListener('click', () => addTargetRow());
+
+    // Test Telegram (alle ontvangers)
     document.getElementById('btnTestTelegram').addEventListener('click', async () => {
-      const res = await fetch('/api/test-telegram', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Testbericht verzonden!', 'success');
-      } else {
-        showToast('Fout: ' + (data.error || 'onbekend'), 'error');
+      try {
+        const res = await fetch('/api/test-telegram', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          const n = (data.results || []).length;
+          showToast(n > 1 ? `Testbericht verzonden naar ${n} ontvangers!` : 'Testbericht verzonden!', 'success');
+        } else {
+          showToast('Fout: ' + (data.error || 'onbekend'), 'error');
+        }
+      } catch (err) {
+        showToast('Test mislukt: server niet bereikbaar', 'error');
       }
     });
 

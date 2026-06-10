@@ -1,4 +1,17 @@
 const cheerio = require('cheerio');
+const fs = require('fs');
+const path = require('path');
+
+const CONFIG_DIR = process.env.CONFIG_DIR || '/config';
+const SEEN_FILE = path.join(CONFIG_DIR, 'seen.json');
+// Producten die zo lang niet meer in de resultaten zaten, vergeten we weer;
+// duiken ze daarna opnieuw op, dan melden we ze als nieuw. Instelbaar via
+// config.onlyNewDays (dashboard); dit is alleen de fallback.
+const DEFAULT_ONLY_NEW_DAYS = 7;
+
+// Telegram weigert berichten boven 4096 tekens; we splitsen ruim daaronder
+// zodat HTML-entiteiten en de header er altijd in passen.
+const CHUNK_LIMIT = 3500;
 
 // Zoekfilter: producten met een verkoopprijs tussen 0 en 0.48 EUR
 // (de "Geen prijs aanwezig" / gratis producten staan hier tussen).
@@ -40,10 +53,10 @@ const siteConfigs = {
 };
 
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'sec-ch-ua': '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
   'sec-ch-ua-mobile': '?0',
   'sec-ch-ua-platform': '"macOS"',
   'Upgrade-Insecure-Requests': '1',
@@ -56,7 +69,44 @@ const BROWSER_HEADERS = {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function escapeHTML(text) {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Voor gebruik in een HTML-attribuut (href): ook quotes escapen, anders kan
+// een URL met " of & het hele Telegram-bericht laten afkeuren.
+function escapeAttr(text) {
+  return String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+// --- Geziene producten (voor 'alleen nieuwe melden') -----------------------
+
+// Structuur: { "<siteKey>": { "<productCode>": "<laatst gezien, ISO>" } }
+function loadSeen() {
+  try {
+    if (fs.existsSync(SEEN_FILE)) {
+      return JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8'));
+    }
+  } catch (err) {
+    console.error('seen.json laden mislukt:', err.message);
+  }
+  return {};
+}
+
+function saveSeen(seen) {
+  try {
+    fs.writeFileSync(SEEN_FILE, JSON.stringify(seen, null, 2));
+  } catch (err) {
+    console.error('seen.json opslaan mislukt:', err.message);
+  }
+}
+
+function pruneSeen(seen, maxAgeDays) {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  for (const siteKey of Object.keys(seen)) {
+    for (const [code, iso] of Object.entries(seen[siteKey])) {
+      if (new Date(iso).getTime() < cutoff) delete seen[siteKey][code];
+    }
+  }
 }
 
 // --- Spartacus (Kruidvat NL/BE) ------------------------------------------
@@ -107,8 +157,9 @@ function scrapeSpartacus(html, site) {
     return [];
   }
 
+  // Een ontbrekend price-object telt ook als "geen prijs aanwezig".
   return model.products
-    .filter(p => p.price && p.price.value === 0)
+    .filter(p => !p.price || p.price.value === 0)
     .map(p => {
       let link = p.url || '#';
       if (!link.startsWith('http')) link = site.domain + link;
@@ -195,17 +246,46 @@ async function scrapeSite(site) {
 }
 
 async function sendTelegram(botId, chatId, text, parseMode = null) {
-  const body = { chat_id: chatId, text };
+  const body = { chat_id: chatId, text, disable_web_page_preview: true };
   if (parseMode) body.parse_mode = parseMode;
   try {
-    await fetch(`https://api.telegram.org/bot${botId}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${botId}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      console.error('Telegram weigerde bericht:', data.description || `HTTP ${res.status}`);
+      return false;
+    }
+    return true;
   } catch (err) {
     console.error('Telegram fout:', err.message);
+    return false;
   }
+}
+
+// Stuurt een bericht naar álle geconfigureerde bot/chat-combinaties.
+async function broadcast(targets, text, parseMode = null) {
+  for (const t of targets) {
+    await sendTelegram(t.botId, t.chatId, text, parseMode);
+  }
+}
+
+// Stuurt een kop + productregels, automatisch opgesplitst in meerdere
+// berichten als de 4096-tekens-limiet van Telegram in zicht komt.
+async function sendProductList(targets, header, lines) {
+  let chunk = header;
+  for (const line of lines) {
+    if (chunk.length + line.length + 1 > CHUNK_LIMIT) {
+      await broadcast(targets, chunk, 'HTML');
+      chunk = line;
+    } else {
+      chunk += '\n' + line;
+    }
+  }
+  if (chunk.trim()) await broadcast(targets, chunk, 'HTML');
 }
 
 // Leesbare voorraad voor in het Telegram-bericht. Gebaseerd op inStock
@@ -216,60 +296,92 @@ function stockText(p) {
   return 'onbekend';
 }
 
+function productLine(p) {
+  return `• <a href="${escapeAttr(p.link)}">${escapeHTML(p.name)}</a>`
+    + ` (voorraad: ${stockText(p)})${p.isNew ? ' 🆕' : ''}`;
+}
+
+// Geldige ontvangers uit de config: lijst van { botId, chatId }-paren.
+// Oude configs met een los botId/chatId-veld worden door server.js gemigreerd.
+function validTargets(config) {
+  const list = Array.isArray(config.telegramTargets) ? config.telegramTargets : [];
+  return list.filter(t => t && t.botId && t.chatId);
+}
+
 async function runCheck(config, isManual = false) {
-  const { botId, chatId, onlyInStock, notifyEmpty, sitesEnabled } = config;
-  if (!botId || !chatId) {
-    console.log('Bot ID of Chat ID ontbreekt, check overgeslagen.');
-    return { success: false, error: 'Bot ID of Chat ID ontbreekt' };
+  const { onlyInStock, onlyNew, onlyNewDays, notifyEmpty, sitesEnabled } = config;
+  const targets = validTargets(config);
+  if (targets.length === 0) {
+    console.log('Geen Telegram-ontvangers geconfigureerd, check overgeslagen.');
+    return { success: false, error: 'Geen Telegram-ontvangers geconfigureerd' };
   }
 
+  const maxAgeDays = (Number.isFinite(onlyNewDays) && onlyNewDays >= 1)
+    ? onlyNewDays
+    : DEFAULT_ONLY_NEW_DAYS;
+  const seen = loadSeen();
+  pruneSeen(seen, maxAgeDays);
+  const now = new Date().toISOString();
   const results = [];
+  const enabled = Array.isArray(sitesEnabled) ? sitesEnabled : [];
 
-  for (const key of sitesEnabled) {
-    const site = siteConfigs[key];
+  for (let i = 0; i < enabled.length; i++) {
+    const site = siteConfigs[enabled[i]];
     if (!site) continue;
 
+    // Pauze tussen sites (niet vóór de eerste, niet na de laatste)
+    if (i > 0) await delay(2000);
+
     console.log(`Scannen: ${site.displayName}...`);
-    // Voorraad komt nu rechtstreeks uit de zoekpagina (bij Kruidvat),
-    // dus per-product API-calls (en de bijbehorende vertragingen) zijn weg.
     const products = await scrapeSite(site);
 
     // Filter op voorraad indien nodig. inStock: true = op voorraad,
-    // false = uitverkocht, null = onbekend (Trekpleister). We houden 'op
-    // voorraad' én 'onbekend' aan, zodat we geen Trekpleister-treffer missen.
+    // false = uitverkocht, null = onbekend. We houden 'op voorraad' én
+    // 'onbekend' aan, zodat we geen treffer missen.
     const filtered = onlyInStock
       ? products.filter(p => p.inStock !== false)
       : products;
 
-    const siteResult = {
+    // Markeer nieuw t.o.v. eerder gemelde producten en werk seen bij.
+    // We registreren alleen producten die het filter passeren: een product dat
+    // eerder uitverkocht was en later op voorraad komt, telt zo als nieuw.
+    if (!seen[site.key]) seen[site.key] = {};
+    for (const p of filtered) {
+      p.isNew = !seen[site.key][p.code];
+      seen[site.key][p.code] = now;
+    }
+
+    // Bij 'alleen nieuwe melden' beperken geplande checks zich tot nieuwe
+    // vondsten; een handmatige check toont altijd alles (met 🆕-markering).
+    const toReport = (onlyNew && !isManual)
+      ? filtered.filter(p => p.isNew)
+      : filtered;
+
+    results.push({
       site: site.displayName,
-      siteKey: key,
+      siteKey: site.key,
       totalFound: products.length,
       afterFilter: filtered.length,
+      newCount: filtered.filter(p => p.isNew).length,
       products: filtered
-    };
-    results.push(siteResult);
+    });
 
-    // Pauze tussen sites
-    await delay(2000);
-
-    // Stuur Telegram bericht
-    if (filtered.length === 0) {
+    if (toReport.length === 0) {
       if (isManual || notifyEmpty) {
-        await sendTelegram(botId, chatId,
-          `✅ ${site.displayName}: geen producten gevonden conform filter.`);
+        const why = (onlyNew && !isManual && filtered.length > 0)
+          ? 'geen nieuwe producten'
+          : 'geen producten gevonden conform filter';
+        await broadcast(targets, `✅ ${site.displayName}: ${why}.`);
       }
     } else {
-      let message = `${site.displayName}: ${filtered.length} producten zonder prijs:\n\n`;
-      filtered.forEach(p => {
-        message += `• <a href="${p.link}">${escapeHTML(p.name)}</a> (voorraad: ${stockText(p)})\n`;
-      });
-      await sendTelegram(botId, chatId, message, 'HTML');
+      const header = `${site.displayName}: ${toReport.length} producten zonder prijs:\n`;
+      await sendProductList(targets, header, toReport.map(productLine));
     }
   }
 
+  saveSeen(seen);
   console.log(`Check voltooid. ${results.reduce((s, r) => s + r.afterFilter, 0)} producten gevonden.`);
   return { success: true, results, timestamp: new Date().toISOString() };
 }
 
-module.exports = { runCheck, siteConfigs };
+module.exports = { runCheck, siteConfigs, validTargets };

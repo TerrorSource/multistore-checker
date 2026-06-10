@@ -5,6 +5,72 @@ bij ingrijpende/brekende wijzigingen). De actieve versie staat in de
 projectroot als map `<versienummer>/`; oudere versies worden gearchiveerd in
 `../_oldversions/<versienummer>/`.
 
+## [1.10.0] — 2026-06-10
+
+### Toegevoegd
+- **Meerdere Telegram-ontvangers**: in het dashboard kunnen nu meerdere
+  bot-token/chat-ID-paren worden ingevuld (rijen toevoegen/verwijderen); elke
+  melding en elk testbericht gaat naar álle ontvangers. Config-veld
+  `telegramTargets` (lijst van `{ botId, chatId }`); de oude losse
+  `botId`/`chatId` worden bij het opstarten automatisch gemigreerd naar de
+  eerste ontvanger.
+- "Test Telegram" rapporteert per ontvanger of het bericht aankwam en nummert
+  de testberichten (`ontvanger 1/2`).
+
+### Beveiliging
+- Tokens blijven server-side: per rij wordt alleen een gemaskeerde weergave
+  getoond; veld leeg laten = opgeslagen token behouden (zoals sinds 1.7.0).
+
+## [1.9.0] — 2026-06-10
+
+### Toegevoegd
+- Het aantal dagen waarna een afwezig product weer als nieuw wordt gemeld is
+  nu instelbaar via het dashboard (veld "Opnieuw melden na afwezigheid van
+  (dagen)", config-veld `onlyNewDays`, standaard 7, minimaal 1).
+
+## [1.8.0] — 2026-06-10
+
+### Gewijzigd
+- "Alleen nieuwe producten melden": een product wordt na **7 dagen** afwezigheid
+  uit de zoekresultaten weer als nieuw gemeld (was 60 dagen).
+
+## [1.7.0] — 2026-06-10
+
+### Opgelost
+- **Telegram-limiet**: lange productlijsten worden opgesplitst in meerdere
+  berichten (limiet 4096 tekens); de Telegram-API-respons wordt nu
+  gecontroleerd en fouten worden gelogd i.p.v. stil genegeerd.
+- **Scheduler**: cron-vertaling vervangen door een setTimeout-keten. Elk
+  interval in minuten werkt nu exact (90, 35, >24u — voorheen ongeldig of
+  misleidend), en de volgende run start pas na afloop van de vorige.
+  Dependency `node-cron` verwijderd.
+- **Token-lek**: `/api/config` stuurt het bot-token niet meer naar de browser;
+  alleen een gemaskeerde weergave. In de UI: veld leeg laten = token behouden.
+- **Validatie**: `sitesEnabled` wordt server-side gevalideerd (array + alleen
+  bekende sites).
+- Verouderd UI-label "Trekpleister altijd" bij het voorraadfilter gecorrigeerd.
+- Product-links in Telegram-berichten worden attribuut-ge-escaped (`&`, `"`),
+  zodat een afwijkende URL niet het hele bericht laat afkeuren.
+- Spartacus: producten zonder `price`-object tellen nu ook als "geen prijs".
+- Dashboard: nette foutafhandeling bij onbereikbare server (toast + "Offline"),
+  logs/resultaten worden HTML-ge-escaped, knoppen herstellen altijd.
+- Docker-healthcheck respecteert de `PORT`-omgevingsvariabele.
+
+### Toegevoegd
+- **Alleen nieuwe producten melden** (instelbaar, standaard uit): geplande
+  checks melden alleen producten die nog niet eerder gemeld zijn (geheugen in
+  `/config/seen.json`, vergeten na 60 dagen afwezigheid). Handmatige checks
+  tonen altijd alles, met 🆕-markering bij nieuwe vondsten.
+- CI-workflow bouwt nu ook **versie-tags** (`v1.7.0` → image `:1.7.0` en
+  `:1.7`) en **multi-arch** (linux/amd64 + linux/arm64).
+- `package-lock.json` gecommit en build via `npm ci` → reproduceerbare builds.
+- `engines: node >=20` in package.json (global fetch vereist).
+
+### Gewijzigd
+- Telegram-berichten zonder grote linkpreview (`disable_web_page_preview`).
+- Browser-headers bijgewerkt naar Chrome 136.
+- Pauze tussen sites alleen nog tússen sites (bericht wordt direct verstuurd).
+
 ## [1.6.0] — 2026-06-09
 
 ### Toegevoegd
