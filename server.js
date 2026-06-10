@@ -131,37 +131,26 @@ async function executeCheck(isManual) {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-function maskToken(botId) {
-  return botId ? botId.substring(0, 6) + '...' + botId.slice(-4) : '';
-}
-
 // API routes
 app.get('/api/config', (req, res) => {
-  // Stuur de config zonder bot-tokens; alleen een gemaskeerde weergave.
-  const { telegramTargets, ...safe } = config;
-  safe.telegramTargets = (telegramTargets || []).map(t => ({
-    chatId: t.chatId,
-    botIdMasked: maskToken(t.botId)
-  }));
-  res.json(safe);
+  // Bot-tokens gaan volledig mee naar het dashboard, zodat ze zichtbaar en
+  // bewerkbaar zijn. Let op: iedereen die het dashboard kan openen, kan de
+  // tokens dus zien — zet de poort niet open naar internet.
+  res.json(config);
 });
 
 app.post('/api/config', (req, res) => {
   const updates = req.body || {};
-  // Ontvangers: elke rij heeft een chatId en óf een nieuw token (botId), óf
-  // een verwijzing naar een bestaande entry (keepIndex) waarvan het token
-  // behouden blijft — tokens verlaten de server immers nooit.
+  // Ontvangers: lijst van { botId, chatId }; volledig lege rijen worden
+  // genegeerd, half ingevulde rijen geven een foutmelding.
   if (Array.isArray(updates.telegramTargets)) {
     const merged = [];
     for (const [i, t] of updates.telegramTargets.entries()) {
       if (!t || typeof t !== 'object') continue;
+      const botId = String(t.botId || '').trim();
       const chatId = String(t.chatId || '').trim();
-      const newToken = typeof t.botId === 'string' ? t.botId.trim() : '';
-      const keepIdx = Number.isInteger(t.keepIndex) ? t.keepIndex : -1;
-      const oldToken = (config.telegramTargets[keepIdx] || {}).botId || '';
-      const botId = newToken || oldToken;
-      if (!chatId && !botId) continue; // volledig lege rij stilzwijgend negeren
-      if (!chatId || !botId) {
+      if (!botId && !chatId) continue;
+      if (!botId || !chatId) {
         return res.json({ success: false, error: `Ontvanger ${i + 1}: bot-token of chat-ID ontbreekt` });
       }
       merged.push({ botId, chatId });

@@ -5,6 +5,16 @@ bij ingrijpende/brekende wijzigingen). De actieve versie staat in de
 projectroot als map `<versienummer>/`; oudere versies worden gearchiveerd in
 `../_oldversions/<versienummer>/`.
 
+## [1.12.0] — 2026-06-10
+
+### Gewijzigd
+- **Bot-tokens zijn weer volledig zichtbaar** in het dashboard (op verzoek):
+  het token staat gewoon als waarde in het veld, net als de chat-ID. De
+  "leeg laten = behouden"/keepIndex-constructie uit 1.7.0–1.11.0 is daarmee
+  vervallen; opslaan stuurt simpelweg alle rijen (`{ botId, chatId }`) op.
+- Let op: iedereen die het dashboard kan openen kan de tokens nu ook lezen —
+  houd de poort LAN-only.
+
 ## [1.11.0] — 2026-06-10
 
 ### Opgelost

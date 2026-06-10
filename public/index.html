@@ -105,8 +105,6 @@
       min-width: 0;
     }
     .target-row input:focus { outline: none; border-color: #e94560; }
-    .target-row input.saved { border-color: #4ecca3; }
-    .target-row input.saved::placeholder { color: #4ecca3; opacity: 0.8; }
     .target-row .t-bot { flex: 3; }
     .target-row .t-chat { flex: 2; }
     .target-row .btn-remove {
@@ -280,7 +278,7 @@
     <div class="card">
       <h2>Telegram instellingen</h2>
       <div class="form-group">
-        <label>Ontvangers — elk bericht gaat naar alle regels (token leeg laten = opgeslagen token behouden)</label>
+        <label>Ontvangers — elk bericht gaat naar alle regels</label>
         <div class="target-head"><span>Bot Token</span><span>Chat ID</span><span></span></div>
         <div id="targetsContainer"></div>
       </div>
@@ -375,27 +373,16 @@
     }
 
     // --- Telegram-ontvangers (meerdere bot/chat-paren) ---
-    // Tokens komen nooit mee van de server; bestaande rijen tonen de
-    // gemaskeerde versie als placeholder en onthouden via data-keep welke
-    // server-entry hun token levert zolang het veld leeg blijft.
-    function addTargetRow(target = null, keepIndex = null) {
+    function addTargetRow(target = null) {
       const row = document.createElement('div');
       row.className = 'target-row';
-      row.dataset.keep = keepIndex === null ? '' : String(keepIndex);
 
       const bot = document.createElement('input');
       bot.type = 'text';
       bot.className = 't-bot';
       bot.autocomplete = 'off';
-      if (target && target.botIdMasked) {
-        // Token staat server-side opgeslagen: maak dat expliciet zichtbaar,
-        // anders oogt het lege veld als "niet opgeslagen".
-        bot.placeholder = `✓ Opgeslagen: ${target.botIdMasked} — leeg laten = behouden`;
-        bot.classList.add('saved');
-        bot.title = 'Er is een token opgeslagen voor deze ontvanger. Vul alleen iets in om het te vervangen.';
-      } else {
-        bot.placeholder = '123456:ABC-DEF...';
-      }
+      bot.placeholder = '123456:ABC-DEF...';
+      bot.value = (target && target.botId) || '';
 
       const chat = document.createElement('input');
       chat.type = 'text';
@@ -422,7 +409,7 @@
     function renderTargets(targets) {
       const c = document.getElementById('targetsContainer');
       c.innerHTML = '';
-      targets.forEach((t, i) => addTargetRow(t, i));
+      targets.forEach(t => addTargetRow(t));
       if (targets.length === 0) addTargetRow();
       targetsDirty = false;
     }
@@ -432,12 +419,8 @@
       document.querySelectorAll('#targetsContainer .target-row').forEach(row => {
         const botVal = row.querySelector('.t-bot').value.trim();
         const chatVal = row.querySelector('.t-chat').value.trim();
-        const keep = row.dataset.keep;
-        if (!botVal && !chatVal && keep === '') return; // lege nieuwe rij overslaan
-        const t = { chatId: chatVal };
-        if (botVal) t.botId = botVal;
-        if (keep !== '') t.keepIndex = parseInt(keep, 10);
-        out.push(t);
+        if (!botVal && !chatVal) return; // lege rij overslaan
+        out.push({ botId: botVal, chatId: chatVal });
       });
       return out;
     }

@@ -130,7 +130,7 @@ sent to all of them. Remove a row with ✕.
 
 | Field | Description |
 |---|---|
-| **Bot Token** | Your Telegram bot token from @BotFather. Saved tokens are never sent back to the browser (a masked version is shown as placeholder); leave the field empty to keep the stored token |
+| **Bot Token** | Your Telegram bot token from @BotFather, shown in full in the dashboard. Anyone who can reach the dashboard can read it, so keep the port LAN-only |
 | **Chat ID** | The chat or group ID to send notifications to |
 
 Existing configs with a single `botId`/`chatId` are migrated automatically to
