@@ -5,6 +5,19 @@ bij ingrijpende/brekende wijzigingen). De actieve versie staat in de
 projectroot als map `<versienummer>/`; oudere versies worden gearchiveerd in
 `../_oldversions/<versienummer>/`.
 
+## [1.13.0] — 2026-06-11
+
+### Opgelost
+- **Trekpleister-voorraad klopt nu met de koopbaarheid op de site.** Het
+  `data-item-in-stock`-attribuut bleek magazijndata: het kan 'inStock' zeggen
+  terwijl het product online niet te koop is (bv. Finish Powerball). De échte
+  koopbaarheid wordt nu gelezen uit het boolean `purchasable`-attribuut op de
+  `<e2-add-to-cart>` in elke zoektegel (zelfde patroon als `inStockFlag` bij
+  Kruidvat in 1.5.0).
+- **Trekpleister-zoek-URL gerepareerd**: de oude `%2B`-encoding (plus) wordt
+  inmiddels door de site geweigerd met HTTP 400; spaties worden nu als `%20`
+  gestuurd.
+
 ## [1.12.0] — 2026-06-10
 
 ### Gewijzigd

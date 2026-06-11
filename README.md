@@ -192,8 +192,8 @@ right strategy per store (no headless browser needed in either case):
 
 1. For each enabled store, the checker fetches the search results page filtered on products priced between 0 and 0.48 EUR (up to 100 results)
 2. **Kruidvat NL & BE** now run on SAP **Spartacus** (Angular). The product data is server-side rendered and embedded in the page as JSON inside `<script id="spartacus-app-state">`. The checker parses that JSON and keeps the products with a price of € 0,00 — including stock level and order status, which are already present (no extra API call needed). Note: Kruidvat BE uses a `/nl/` locale prefix.
-3. **Trekpleister** has not migrated and still serves the older HTML layout. It is parsed with **Cheerio**, looking for tiles marked "Geen prijs aanwezig"; code, name, link and stock status are read from the tile's `e2-impression-tracker` data attributes.
-4. If the `onlyInStock` filter is on, only in-stock products are kept (Kruidvat via `inStockFlag` in the app state; Trekpleister via the `data-item-in-stock` attribute); products with unknown status are always kept
+3. **Trekpleister** has not migrated and still serves the older HTML layout. It is parsed with **Cheerio**, looking for tiles marked "Geen prijs aanwezig"; code, name and link are read from the tile's `e2-impression-tracker` data attributes. Note: the search URL must encode spaces as `%20` — the site rejects `%2B` with HTTP 400.
+4. If the `onlyInStock` filter is on, only truly buyable products are kept (Kruidvat via `inStockFlag` in the app state; Trekpleister via the boolean `purchasable` attribute on the tile's `e2-add-to-cart` — `data-item-in-stock` is warehouse data and can claim "inStock" for products that cannot be ordered); products with unknown status are always kept
 5. With `onlyNew` enabled, scheduled checks only report products that have not been reported before (tracked per store in `/config/seen.json`)
 6. Results are sent to Telegram with product names as clickable links; lists longer than Telegram's 4096-character limit are split into multiple messages
 7. A 2-second delay between sites keeps requests friendly

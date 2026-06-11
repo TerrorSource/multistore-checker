@@ -48,7 +48,9 @@ const siteConfigs = {
     displayName: 'Trekpleister NL',
     domain: 'https://www.trekpleister.nl',
     platform: 'legacy',
-    checkUrl: 'https://www.trekpleister.nl/search?q=%3A%3AsalePriceRange%3A0%2BTO%2B0.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc'
+    // LET OP: %20 als spatie-encoding; %2B (plus) wordt sinds medio 2026 door
+    // Trekpleister geweigerd met HTTP 400.
+    checkUrl: 'https://www.trekpleister.nl/search?q=%3A%3AsalePriceRange%3A0%20TO%200.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc'
   }
 };
 
@@ -203,18 +205,22 @@ function scrapeLegacy(html, site) {
     const name = tracker.attr('data-item-name')
       || $el.find('.tile__product-slide-product-name').text().trim()
       || 'Onbekend';
-    // Voorraadstatus uit het server-side gerenderde data-item-in-stock
-    // attribuut ('inStock' | 'outOfStock' | 'lowStock' ...). Dit is consistent
-    // met de bestelbaarheid op de zoekpagina (de add-to-cart krijgt server-side
-    // het 'out-of-stock'-attribuut), dus betrouwbaar genoeg om op te filteren.
+    // LET OP: data-item-in-stock is magazijndata en kan 'inStock' zeggen
+    // terwijl het product online niet te koop is (vgl. inStockFlag bij
+    // Kruidvat). De échte koopbaarheid is het boolean attribuut 'purchasable'
+    // op de <e2-add-to-cart> in de tegel: aanwezig = te koop, afwezig = niet.
     const status = tracker.attr('data-item-in-stock') || null;
+    const cart = $el.find('e2-add-to-cart');
+    const inStock = cart.length
+      ? cart.attr('purchasable') !== undefined
+      : (status ? status !== 'outOfStock' : null);
     products.push({
       name,
       link,
       code,
       stockLevel: null,
       stockStatus: status,
-      inStock: status ? status !== 'outOfStock' : null
+      inStock
     });
   });
 
