@@ -1,5 +1,8 @@
 node_modules
-config
 data
+config
+*.log
+.git
 .DS_Store
-*.md
+docker-compose*.yml
+README.md

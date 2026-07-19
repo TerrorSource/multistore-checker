@@ -1,14 +1,17 @@
 services:
   multistore-checker:
-    image: ghcr.io/terrorsource/multistore-checker:latest
+    # Gepubliceerde image (via GitHub Actions):
+    # image: ghcr.io/terrorsource/multistore-checker:latest
+    build: .
     container_name: multistore-checker
     restart: unless-stopped
     network_mode: bridge
     environment:
       - TZ=Europe/Amsterdam
-      - PUID=1000
-      - PGID=1000
     ports:
       - "9060:8000"
     volumes:
-      - /share/CACHEDEV1_DATA/Docker/multistore-checker:/config
+      # Nieuwe installaties: map naar /data.
+      # Bestaande v1.x-installaties kunnen hun oude mount naar /config gewoon
+      # laten staan; de app herkent dat en migreert de instellingen vanzelf.
+      - ./data:/data

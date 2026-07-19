@@ -3,445 +3,225 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Multistore Checker</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a2e;
-      color: #eee;
-      min-height: 100vh;
-    }
-    .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-    .app-footer { text-align: center; color: #9aa2b0; font-size: 12px; margin-top: 24px; }
-    header {
-      text-align: center;
-      padding: 30px 0 20px;
-    }
-    header h1 { font-size: 24px; color: #e94560; }
-    header p { color: #888; font-size: 14px; margin-top: 4px; }
-
-    .status-bar {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-    .status-card {
-      flex: 1;
-      min-width: 140px;
-      background: #16213e;
-      border-radius: 10px;
-      padding: 16px;
-      text-align: center;
-    }
-    .status-card .label { font-size: 12px; color: #888; text-transform: uppercase; }
-    .status-card .value { font-size: 20px; font-weight: bold; margin-top: 4px; }
-    .status-card .value.active { color: #4ecca3; }
-    .status-card .value.inactive { color: #e94560; }
-
-    .card {
-      background: #16213e;
-      border-radius: 10px;
-      padding: 20px;
-      margin-bottom: 16px;
-    }
-    .card h2 {
-      font-size: 16px;
-      color: #e94560;
-      margin-bottom: 14px;
-      border-bottom: 1px solid #233;
-      padding-bottom: 8px;
-    }
-
-    .form-group {
-      margin-bottom: 12px;
-    }
-    .form-group label {
-      display: block;
-      font-size: 13px;
-      color: #aaa;
-      margin-bottom: 4px;
-    }
-    .form-group input[type="text"],
-    .form-group input[type="number"],
-    .form-group select {
-      width: 100%;
-      padding: 10px 12px;
-      background: #0f3460;
-      border: 1px solid #233;
-      border-radius: 6px;
-      color: #eee;
-      font-size: 14px;
-    }
-    .form-group input:focus, .form-group select:focus {
-      outline: none;
-      border-color: #e94560;
-    }
-
-    .target-head {
-      display: flex;
-      gap: 8px;
-      font-size: 12px;
-      color: #888;
-      margin-bottom: 4px;
-    }
-    .target-head span:nth-child(1) { flex: 3; }
-    .target-head span:nth-child(2) { flex: 2; }
-    .target-head span:nth-child(3) { width: 36px; }
-    .target-row {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 8px;
-      align-items: center;
-    }
-    .target-row input {
-      padding: 10px 12px;
-      background: #0f3460;
-      border: 1px solid #233;
-      border-radius: 6px;
-      color: #eee;
-      font-size: 14px;
-      min-width: 0;
-    }
-    .target-row input:focus { outline: none; border-color: #e94560; }
-    .target-row .t-bot { flex: 3; }
-    .target-row .t-chat { flex: 2; }
-    .target-row .btn-remove {
-      width: 36px;
-      height: 38px;
-      flex: none;
-      background: #0f3460;
-      border: 1px solid #444;
-      border-radius: 6px;
-      color: #e94560;
-      font-size: 16px;
-      cursor: pointer;
-    }
-    .target-row .btn-remove:hover { background: #e94560; color: #fff; }
-
-    .checkbox-group {
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-      margin-top: 6px;
-    }
-    .checkbox-group label {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 14px;
-      color: #ccc;
-      cursor: pointer;
-    }
-    .checkbox-group input[type="checkbox"] {
-      accent-color: #e94560;
-      width: 16px;
-      height: 16px;
-    }
-
-    .switch-container {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-    .switch {
-      position: relative;
-      width: 50px;
-      height: 26px;
-    }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: #333;
-      border-radius: 26px;
-      transition: 0.3s;
-    }
-    .slider:before {
-      content: "";
-      position: absolute;
-      height: 20px;
-      width: 20px;
-      left: 3px;
-      bottom: 3px;
-      background: #eee;
-      border-radius: 50%;
-      transition: 0.3s;
-    }
-    .switch input:checked + .slider { background: #4ecca3; }
-    .switch input:checked + .slider:before { transform: translateX(24px); }
-
-    .btn-row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-top: 14px;
-    }
-    .btn {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-    .btn:hover { opacity: 0.85; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-primary { background: #e94560; color: #fff; }
-    .btn-secondary { background: #0f3460; color: #eee; border: 1px solid #444; }
-    .btn-success { background: #4ecca3; color: #1a1a2e; }
-
-    .toast {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      padding: 12px 20px;
-      border-radius: 8px;
-      font-size: 14px;
-      color: #fff;
-      opacity: 0;
-      transform: translateY(10px);
-      transition: all 0.3s;
-      z-index: 999;
-    }
-    .toast.show { opacity: 1; transform: translateY(0); }
-    .toast.success { background: #4ecca3; color: #1a1a2e; }
-    .toast.error { background: #e94560; }
-    .toast.info { background: #0f3460; }
-
-    .log-container {
-      max-height: 300px;
-      overflow-y: auto;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      line-height: 1.6;
-    }
-    .log-entry { padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
-    .log-time { color: #666; }
-    .log-msg { color: #ccc; }
-
-    .results-grid {
-      display: grid;
-      gap: 8px;
-    }
-    .result-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px 12px;
-      background: #0f3460;
-      border-radius: 6px;
-    }
-    .result-item .site-name { font-weight: 600; }
-    .result-item .count {
-      background: #e94560;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 13px;
-    }
-    .result-item .count.zero { background: #4ecca3; color: #1a1a2e; }
-  </style>
+  <title>Multistore Checker — Zoeken</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>Multistore Checker</h1>
-      <p>Docker Edition &mdash; Gemaakt door Makooy</p>
-    </header>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="brand-kv">multistore</span><span class="brand-pw">Checker</span></div>
+      <nav class="topnav">
+        <a href="/">Zoeken</a>
+        <a href="/gevolgd">Gevolgde producten</a>
+        <a href="/instellingen">Instellingen</a>
+      </nav>
+    </div>
+  </div>
 
+  <div class="container">
     <div class="status-bar">
       <div class="status-card">
-        <div class="label">Status</div>
+        <div class="label">Aanbiedingen-checker</div>
         <div class="value" id="statusActive">Laden...</div>
+      </div>
+      <div class="status-card">
+        <div class="label">Gratis-checker</div>
+        <div class="value" id="statusGratis">-</div>
+      </div>
+      <div class="status-card">
+        <div class="label">Gevolgd</div>
+        <div class="value" id="statusWatching">-</div>
+      </div>
+      <div class="status-card">
+        <div class="label">In de aanbieding</div>
+        <div class="value deals" id="statusDeals">-</div>
       </div>
       <div class="status-card">
         <div class="label">Laatste check</div>
         <div class="value" id="statusLastCheck" style="font-size:14px">-</div>
       </div>
-      <div class="status-card">
-        <div class="label">Bezig</div>
-        <div class="value" id="statusRunning">-</div>
-      </div>
     </div>
 
-    <!-- Laatste resultaten -->
-    <div class="card" id="resultsCard" style="display:none">
-      <h2>Laatste resultaten</h2>
-      <div class="results-grid" id="resultsGrid"></div>
-    </div>
-
-    <!-- Telegram instellingen -->
     <div class="card">
-      <h2>Telegram instellingen</h2>
-      <div class="form-group">
-        <label>Ontvangers — elk bericht gaat naar alle regels</label>
-        <div class="target-head"><span>Bot Token</span><span>Chat ID</span><span></span></div>
-        <div id="targetsContainer"></div>
+      <h2>Product zoeken</h2>
+      <div class="search-row">
+        <input type="text" id="searchInput" placeholder="Zoek op naam of productcode, bv. 'creatine' of 1300552" autocomplete="off">
+        <select id="searchSite">
+          <option value="nl">Kruidvat NL</option>
+          <option value="be">Kruidvat BE</option>
+          <option value="tp">Trekpleister</option>
+        </select>
+        <button class="btn btn-primary" id="btnSearch">Zoeken</button>
       </div>
-      <div class="btn-row">
-        <button class="btn btn-secondary" id="btnAddTarget">+ Ontvanger toevoegen</button>
-        <button class="btn btn-secondary" id="btnTestTelegram">Test Telegram</button>
+      <div class="filter-row">
+        <input type="checkbox" id="showOutOfStock">
+        <label for="showOutOfStock">Toon ook producten die niet op voorraad zijn</label>
       </div>
+      <div class="chip-row" id="categoryChips">
+        <span class="chip-label">Actie:</span>
+      </div>
+      <div class="product-list" id="searchResults"></div>
     </div>
 
-    <!-- Scan instellingen -->
-    <div class="card">
-      <h2>Scan instellingen</h2>
-      <div class="switch-container">
-        <label class="switch">
-          <input type="checkbox" id="active">
-          <span class="slider"></span>
-        </label>
-        <span>Automatisch checken</span>
-      </div>
-      <div class="form-group">
-        <label>Check-interval (minuten)</label>
-        <input type="number" id="interval" min="1" value="360" style="max-width:150px">
-      </div>
-      <div class="form-group">
-        <label>Alleen producten op voorraad</label>
-        <select id="onlyInStock">
-          <option value="true">Ja (alleen op voorraad; status onbekend telt mee)</option>
-          <option value="false">Nee (alle producten)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Alleen nieuwe producten melden</label>
-        <select id="onlyNew">
-          <option value="false">Nee (elke check alle gevonden producten)</option>
-          <option value="true">Ja (alleen nog niet eerder gemelde producten)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Opnieuw melden na afwezigheid van (dagen)</label>
-        <input type="number" id="onlyNewDays" min="1" value="7" style="max-width:150px">
-      </div>
-      <div class="form-group">
-        <label>Bericht bij 0 producten</label>
-        <select id="notifyEmpty">
-          <option value="false">Nee (alleen melden als er producten zijn)</option>
-          <option value="true">Ja (altijd een bericht sturen)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Sites</label>
-        <div class="checkbox-group">
-          <label><input type="checkbox" id="site-nl" value="nl"> Kruidvat NL</label>
-          <label><input type="checkbox" id="site-be" value="be"> Kruidvat BE</label>
-          <label><input type="checkbox" id="site-tp" value="tp"> Trekpleister NL</label>
-        </div>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btnSave">Opslaan</button>
-        <button class="btn btn-success" id="btnCheckNow">Controleer nu</button>
-      </div>
-    </div>
-
-    <!-- Logs -->
-    <div class="card">
-      <h2>Logs</h2>
-      <div class="log-container" id="logContainer">
-        <div class="log-entry"><span class="log-msg">Laden...</span></div>
-      </div>
-    </div>
     <footer class="app-footer">multistore-checker <span id="appVersion">v…</span></footer>
   </div>
 
   <div class="toast" id="toast"></div>
 
+  <script src="/app.js"></script>
   <script>
-    function esc(s) {
-      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    let watchlistItems = [];
+    let lastSearch = { site: 'nl', products: [] };
 
-    function showToast(msg, type = 'info') {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.className = 'toast show ' + type;
-      setTimeout(() => t.className = 'toast', 3000);
-    }
+    // Actie-categorieën (zelfde sleutels als de server meegeeft in
+    // promoCategory). Geen chip actief = geen categoriefilter.
+    const PROMO_CATEGORIES = {
+      'xy-gratis': '1+1 / X+Y gratis',
+      '2e-halve-prijs': '2e halve prijs',
+      'korting': '% korting',
+      'afgeprijsd': 'Afgeprijsd',
+      'overig': 'Overige acties'
+    };
+    const activeCategories = new Set();
 
-    function formatTime(iso) {
-      if (!iso) return '-';
-      const d = new Date(iso);
-      return d.toLocaleString('nl-NL', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
-    }
-
-    // --- Telegram-ontvangers (meerdere bot/chat-paren) ---
-    function addTargetRow(target = null) {
-      const row = document.createElement('div');
-      row.className = 'target-row';
-
-      const bot = document.createElement('input');
-      bot.type = 'text';
-      bot.className = 't-bot';
-      bot.autocomplete = 'off';
-      bot.placeholder = '123456:ABC-DEF...';
-      bot.value = (target && target.botId) || '';
-
-      const chat = document.createElement('input');
-      chat.type = 'text';
-      chat.className = 't-chat';
-      chat.placeholder = '-1001234567890';
-      chat.value = (target && target.chatId) || '';
-
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'btn-remove';
-      del.textContent = '✕';
-      del.title = 'Ontvanger verwijderen';
-      del.addEventListener('click', () => { row.remove(); targetsDirty = true; });
-
-      row.append(bot, chat, del);
-      document.getElementById('targetsContainer').appendChild(row);
-    }
-
-    // Niet-opgeslagen invoer mag nooit door een achtergrond-render gewist
-    // worden; renderTargets() draait daarom alleen als er niets getypt is
-    // (of direct na een geslaagde save, die de invoer juist verwerkt heeft).
-    let targetsDirty = false;
-
-    function renderTargets(targets) {
-      const c = document.getElementById('targetsContainer');
-      c.innerHTML = '';
-      targets.forEach(t => addTargetRow(t));
-      if (targets.length === 0) addTargetRow();
-      targetsDirty = false;
-    }
-
-    function collectTargets() {
-      const out = [];
-      document.querySelectorAll('#targetsContainer .target-row').forEach(row => {
-        const botVal = row.querySelector('.t-bot').value.trim();
-        const chatVal = row.querySelector('.t-chat').value.trim();
-        if (!botVal && !chatVal) return; // lege rij overslaan
-        out.push({ botId: botVal, chatId: chatVal });
-      });
-      return out;
-    }
-
-    async function loadConfig() {
-      try {
-        const res = await fetch('/api/config');
-        const cfg = await res.json();
-        renderTargets(cfg.telegramTargets || []);
-        document.getElementById('active').checked = cfg.active;
-        document.getElementById('interval').value = cfg.interval;
-        document.getElementById('onlyInStock').value = String(cfg.onlyInStock);
-        document.getElementById('onlyNew').value = String(cfg.onlyNew || false);
-        document.getElementById('onlyNewDays').value = cfg.onlyNewDays || 7;
-        document.getElementById('notifyEmpty').value = String(cfg.notifyEmpty || false);
-        document.getElementById('site-nl').checked = cfg.sitesEnabled.includes('nl');
-        document.getElementById('site-be').checked = cfg.sitesEnabled.includes('be');
-        document.getElementById('site-tp').checked = cfg.sitesEnabled.includes('tp');
-      } catch (err) {
-        showToast('Instellingen laden mislukt: server niet bereikbaar', 'error');
+    function renderCategoryChips() {
+      const row = document.getElementById('categoryChips');
+      row.querySelectorAll('.chip').forEach(el => el.remove());
+      for (const [key, label] of Object.entries(PROMO_CATEGORIES)) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip' + (activeCategories.has(key) ? ' active' : '');
+        chip.textContent = label;
+        chip.addEventListener('click', () => {
+          if (activeCategories.has(key)) activeCategories.delete(key);
+          else activeCategories.add(key);
+          renderCategoryChips();
+          renderSearchResults();
+        });
+        row.appendChild(chip);
       }
+    }
+
+    function isWatched(site, code) {
+      return watchlistItems.some(i => i.site === site && i.code === code);
+    }
+
+    function visibleProducts() {
+      const showOOS = document.getElementById('showOutOfStock').checked;
+      return lastSearch.products.filter(p => {
+        // inStock: true = op voorraad, false = niet, null = onbekend.
+        // Onbekend tonen we altijd; 'niet op voorraad' alleen met het vinkje aan.
+        if (!showOOS && p.inStock === false) return false;
+        // Categoriefilter: alleen actief zodra minstens één chip aan staat.
+        if (activeCategories.size > 0 && !activeCategories.has(p.promoCategory)) return false;
+        return true;
+      });
+    }
+
+    function renderSearchResults() {
+      const c = document.getElementById('searchResults');
+      const { site } = lastSearch;
+      const products = visibleProducts();
+      const hidden = lastSearch.products.length - products.length;
+
+      if (lastSearch.products.length === 0) {
+        c.innerHTML = '';
+        return;
+      }
+      const rows = products.map(p => {
+        const promoBadge = p.promo
+          ? `<span class="badge promo">${esc(p.promo.headline)}</span>` : '';
+        const stockBadge = p.inStock === false
+          ? `<span class="badge nostock">niet op voorraad</span>` : '';
+        const watched = isWatched(site, p.code);
+        return `<div class="product-row">
+          ${productImageHtml(p)}
+          <div class="product-info">
+            <div class="pname"><a href="${esc(p.url || '#')}" target="_blank" rel="noopener">${esc(p.name)}</a></div>
+            <div class="pmeta">
+              ${priceHtml(p.priceFormatted, p.oldPriceFormatted)}
+              ${promoBadge} ${stockBadge}
+              <span>code ${esc(p.code)}</span>
+            </div>
+          </div>
+          <div class="product-actions">
+            <button class="btn btn-small ${watched ? 'btn-secondary' : 'btn-primary'}"
+              data-code="${esc(p.code)}" ${watched ? 'disabled' : ''}>
+              ${watched ? '✓ Gevolgd' : '+ Volgen'}
+            </button>
+          </div>
+        </div>`;
+      });
+
+      if (products.length === 0) {
+        rows.push(`<div class="empty-note">Alle ${hidden} gevonden producten zijn verborgen door de filters (voorraad/actie). Pas de filters aan om ze te tonen.</div>`);
+      } else if (hidden > 0) {
+        rows.push(`<div class="empty-note">${hidden} product${hidden === 1 ? '' : 'en'} verborgen door de filters.</div>`);
+      }
+      c.innerHTML = rows.join('');
+
+      c.querySelectorAll('button[data-code]').forEach(btn => {
+        btn.addEventListener('click', () => addToWatchlist(site, btn.dataset.code, btn));
+      });
+    }
+
+    async function doSearch() {
+      const term = document.getElementById('searchInput').value.trim();
+      const site = document.getElementById('searchSite').value;
+      if (!term) return;
+      const btn = document.getElementById('btnSearch');
+      btn.disabled = true;
+      btn.textContent = 'Zoeken...';
+      try {
+        const res = await fetch(`/api/search?site=${encodeURIComponent(site)}&q=${encodeURIComponent(term)}`);
+        const data = await res.json();
+        if (data.success) {
+          lastSearch = { site, products: data.products };
+          renderSearchResults();
+          if (data.products.length === 0) showToast('Geen producten gevonden', 'info');
+        } else {
+          showToast('Zoeken mislukt: ' + (data.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Zoeken mislukt: server niet bereikbaar', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Zoeken';
+      }
+    }
+
+    async function addToWatchlist(site, code, btn) {
+      const p = lastSearch.products.find(x => x.code === code);
+      if (!p) return;
+      if (btn) { btn.disabled = true; btn.textContent = 'Bezig...'; }
+      try {
+        const res = await fetch('/api/watchlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site, code: p.code, name: p.name, url: p.url, image: p.image })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(`"${p.name}" wordt nu gevolgd`, 'success');
+          await loadWatchlist();
+          renderSearchResults();
+          loadStatus();
+        } else {
+          showToast('Toevoegen mislukt: ' + (data.error || 'onbekende fout'), 'error');
+          if (btn) { btn.disabled = false; btn.textContent = '+ Volgen'; }
+        }
+      } catch (err) {
+        showToast('Toevoegen mislukt: server niet bereikbaar', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '+ Volgen'; }
+      }
+    }
+
+    async function loadWatchlist() {
+      try {
+        const res = await fetch('/api/watchlist');
+        const data = await res.json();
+        watchlistItems = data.watchlist || [];
+      } catch { /* stil */ }
     }
 
     let serverDown = false;
@@ -461,123 +241,29 @@
       if (serverDown) {
         serverDown = false;
         showToast('Verbinding hersteld', 'success');
-        // Niet herladen terwijl de gebruiker in de ontvanger-velden typt,
-        // anders raakt niet-opgeslagen invoer kwijt.
-        if (!targetsDirty) loadConfig();
       }
       if (s.version) document.getElementById('appVersion').textContent = 'v' + s.version;
       const activeEl = document.getElementById('statusActive');
       activeEl.textContent = s.active ? 'Actief' : 'Inactief';
       activeEl.className = 'value ' + (s.active ? 'active' : 'inactive');
-      document.getElementById('statusLastCheck').textContent = formatTime(s.lastCheck);
-      document.getElementById('statusRunning').textContent = s.checkRunning ? 'Ja...' : 'Nee';
-
-      if (s.lastResults.length > 0) {
-        document.getElementById('resultsCard').style.display = 'block';
-        const grid = document.getElementById('resultsGrid');
-        grid.innerHTML = s.lastResults.map(r =>
-          `<div class="result-item">
-            <span class="site-name">${esc(r.site)}</span>
-            <span class="count ${r.found === 0 ? 'zero' : ''}">${r.found} producten</span>
-          </div>`
-        ).join('');
-      }
-
-      // Logs
-      const logC = document.getElementById('logContainer');
-      logC.innerHTML = s.logs.map(l =>
-        `<div class="log-entry"><span class="log-time">${formatTime(l.time)}</span> <span class="log-msg">${esc(l.message)}</span></div>`
-      ).join('');
+      const gratisEl = document.getElementById('statusGratis');
+      const gOn = Boolean(s.gratis && s.gratis.active);
+      gratisEl.textContent = (s.gratis && s.gratis.checkRunning) ? 'Bezig...' : (gOn ? 'Actief' : 'Inactief');
+      gratisEl.className = 'value ' + (gOn ? 'active' : 'inactive');
+      document.getElementById('statusWatching').textContent = s.watching;
+      document.getElementById('statusDeals').textContent = s.deals;
+      document.getElementById('statusLastCheck').textContent =
+        s.checkRunning ? 'Bezig...' : formatTime(s.lastCheck);
     }
 
-    // Save
-    document.getElementById('btnSave').addEventListener('click', async () => {
-      const sites = [];
-      if (document.getElementById('site-nl').checked) sites.push('nl');
-      if (document.getElementById('site-be').checked) sites.push('be');
-      if (document.getElementById('site-tp').checked) sites.push('tp');
-
-      const body = {
-        telegramTargets: collectTargets(),
-        active: document.getElementById('active').checked,
-        interval: parseInt(document.getElementById('interval').value, 10),
-        onlyInStock: document.getElementById('onlyInStock').value === 'true',
-        onlyNew: document.getElementById('onlyNew').value === 'true',
-        onlyNewDays: parseInt(document.getElementById('onlyNewDays').value, 10) || 7,
-        notifyEmpty: document.getElementById('notifyEmpty').value === 'true',
-        sitesEnabled: sites
-      };
-
-      try {
-        const res = await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        if (data.success) {
-          showToast('Instellingen opgeslagen!', 'success');
-          // Alleen bij succes herladen: de rijen tonen dan "✓ Opgeslagen".
-          // Bij een fout blijft de invoer staan zodat niets verloren gaat.
-          loadConfig();
-        } else {
-          showToast('Opslaan mislukt: ' + (data.error || 'onbekende fout'), 'error');
-        }
-      } catch (err) {
-        showToast('Opslaan mislukt: server niet bereikbaar', 'error');
-      }
-      loadStatus();
+    document.getElementById('btnSearch').addEventListener('click', doSearch);
+    document.getElementById('searchInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') doSearch();
     });
+    document.getElementById('showOutOfStock').addEventListener('change', renderSearchResults);
 
-    // Check now
-    document.getElementById('btnCheckNow').addEventListener('click', async () => {
-      const btn = document.getElementById('btnCheckNow');
-      btn.disabled = true;
-      btn.textContent = 'Bezig...';
-      showToast('Handmatige check gestart...', 'info');
-
-      try {
-        const res = await fetch('/api/check', { method: 'POST' });
-        const result = await res.json();
-        if (result.success) {
-          const total = result.results.reduce((s, r) => s + r.afterFilter, 0);
-          showToast(`Check voltooid: ${total} producten gevonden`, 'success');
-        } else {
-          showToast('Check mislukt: ' + (result.error || 'onbekende fout'), 'error');
-        }
-      } catch (err) {
-        showToast('Check mislukt: server niet bereikbaar', 'error');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Controleer nu';
-      }
-      loadStatus();
-    });
-
-    // Ontvanger toevoegen
-    document.getElementById('btnAddTarget').addEventListener('click', () => { addTargetRow(); targetsDirty = true; });
-
-    // Test Telegram (alle ontvangers)
-    document.getElementById('btnTestTelegram').addEventListener('click', async () => {
-      try {
-        const res = await fetch('/api/test-telegram', { method: 'POST' });
-        const data = await res.json();
-        if (data.success) {
-          const n = (data.results || []).length;
-          showToast(n > 1 ? `Testbericht verzonden naar ${n} ontvangers!` : 'Testbericht verzonden!', 'success');
-        } else {
-          showToast('Fout: ' + (data.error || 'onbekend'), 'error');
-        }
-      } catch (err) {
-        showToast('Test mislukt: server niet bereikbaar', 'error');
-      }
-    });
-
-    // Init
-    // Elke toetsaanslag in de ontvanger-velden markeert ze als 'dirty'
-    document.getElementById('targetsContainer').addEventListener('input', () => { targetsDirty = true; });
-
-    loadConfig();
+    renderCategoryChips();
+    loadWatchlist();
     loadStatus();
     setInterval(loadStatus, 15000);
   </script>

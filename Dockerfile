@@ -7,7 +7,7 @@ RUN npm ci --omit=dev
 
 COPY . .
 
-RUN mkdir -p /config
+RUN mkdir -p /data
 
 EXPOSE 8000
 

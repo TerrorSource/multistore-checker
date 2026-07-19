@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multistore Checker — Instellingen</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="brand-kv">multistore</span><span class="brand-pw">Checker</span></div>
+      <nav class="topnav">
+        <a href="/">Zoeken</a>
+        <a href="/gevolgd">Gevolgde producten</a>
+        <a href="/instellingen">Instellingen</a>
+      </nav>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Telegram instellingen -->
+    <div class="card">
+      <h2>Telegram instellingen</h2>
+      <div class="form-group">
+        <label>Ontvangers — elk bericht gaat naar alle regels</label>
+        <div class="target-head"><span>Bot Token</span><span>Chat ID</span><span></span></div>
+        <div id="targetsContainer"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnSaveTelegram">Opslaan</button>
+        <button class="btn btn-secondary" id="btnAddTarget">+ Ontvanger toevoegen</button>
+        <button class="btn btn-secondary" id="btnTestTelegram">Test Telegram</button>
+      </div>
+    </div>
+
+    <!-- Scan instellingen -->
+    <div class="card">
+      <h2>Scan instellingen</h2>
+      <div class="switch-container">
+        <label class="switch">
+          <input type="checkbox" id="active">
+          <span class="slider"></span>
+        </label>
+        <span>Automatisch checken</span>
+      </div>
+      <div class="form-group">
+        <label>Check-interval (minuten)</label>
+        <input type="number" id="interval" min="1" value="360" style="max-width:150px">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnSave">Opslaan</button>
+      </div>
+    </div>
+
+    <!-- Gratis producten checker -->
+    <div class="card">
+      <h2>Gratis producten checker</h2>
+      <p class="empty-note" style="margin-bottom:12px">
+        Zoekt op Kruidvat NL/BE en Trekpleister naar producten zonder prijs
+        ("Geen prijs aanwezig" / gratis) en stuurt daarvoor een Telegram-bericht.
+        Gebruikt de Telegram-ontvangers hierboven.
+      </p>
+      <div class="switch-container">
+        <label class="switch">
+          <input type="checkbox" id="gratisActive">
+          <span class="slider"></span>
+        </label>
+        <span>Automatisch checken</span>
+      </div>
+      <div class="form-group">
+        <label>Check-interval (minuten)</label>
+        <input type="number" id="gratisInterval" min="1" value="360" style="max-width:150px">
+      </div>
+      <div class="form-group">
+        <label>Sites</label>
+        <div class="filter-row" style="margin-top:4px; gap:16px">
+          <span><input type="checkbox" id="gratis-site-nl"> <label for="gratis-site-nl">Kruidvat NL</label></span>
+          <span><input type="checkbox" id="gratis-site-be"> <label for="gratis-site-be">Kruidvat BE</label></span>
+          <span><input type="checkbox" id="gratis-site-tp"> <label for="gratis-site-tp">Trekpleister NL</label></span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Alleen producten op voorraad</label>
+        <select id="gratisOnlyInStock">
+          <option value="true">Ja (alleen op voorraad; status onbekend telt mee)</option>
+          <option value="false">Nee (alle producten)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Alleen nieuwe producten melden</label>
+        <select id="gratisOnlyNew">
+          <option value="false">Nee (elke check alle gevonden producten)</option>
+          <option value="true">Ja (alleen nog niet eerder gemelde producten)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Opnieuw melden na afwezigheid van (dagen)</label>
+        <input type="number" id="gratisOnlyNewDays" min="1" value="7" style="max-width:150px">
+      </div>
+      <div class="form-group">
+        <label>Bericht bij 0 producten</label>
+        <select id="gratisNotifyEmpty">
+          <option value="false">Nee (alleen melden als er producten zijn)</option>
+          <option value="true">Ja (altijd een bericht sturen)</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnSaveGratis">Opslaan</button>
+        <button class="btn btn-secondary" id="btnGratisCheck">Controleer nu</button>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div class="card">
+      <h2>Logs</h2>
+      <div class="log-container" id="logContainer">
+        <div class="log-entry"><span class="log-msg">Laden...</span></div>
+      </div>
+    </div>
+
+    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span></footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/app.js"></script>
+  <script>
+    // --- Telegram-ontvangers ---
+    let targetsDirty = false;
+
+    function addTargetRow(target = null) {
+      const row = document.createElement('div');
+      row.className = 'target-row';
+
+      const bot = document.createElement('input');
+      bot.type = 'text';
+      bot.className = 't-bot';
+      bot.autocomplete = 'off';
+      bot.placeholder = '123456:ABC-DEF...';
+      bot.value = (target && target.botId) || '';
+
+      const chat = document.createElement('input');
+      chat.type = 'text';
+      chat.className = 't-chat';
+      chat.placeholder = '-1001234567890';
+      chat.value = (target && target.chatId) || '';
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn-remove';
+      del.textContent = '✕';
+      del.title = 'Ontvanger verwijderen';
+      del.addEventListener('click', () => { row.remove(); targetsDirty = true; });
+
+      row.append(bot, chat, del);
+      document.getElementById('targetsContainer').appendChild(row);
+    }
+
+    function renderTargets(targets) {
+      const c = document.getElementById('targetsContainer');
+      c.innerHTML = '';
+      targets.forEach(t => addTargetRow(t));
+      if (targets.length === 0) addTargetRow();
+      targetsDirty = false;
+    }
+
+    function collectTargets() {
+      const out = [];
+      document.querySelectorAll('#targetsContainer .target-row').forEach(row => {
+        const botVal = row.querySelector('.t-bot').value.trim();
+        const chatVal = row.querySelector('.t-chat').value.trim();
+        if (!botVal && !chatVal) return;
+        out.push({ botId: botVal, chatId: chatVal });
+      });
+      return out;
+    }
+
+    // --- Config ---
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const cfg = await res.json();
+        // Ontvanger-rijen niet opnieuw renderen zolang er niet-opgeslagen
+        // invoer staat (targetsDirty), anders raakt die kwijt bij het opslaan
+        // van een van de andere kaarten.
+        if (!targetsDirty) renderTargets(cfg.telegramTargets || []);
+        document.getElementById('active').checked = cfg.active;
+        document.getElementById('interval').value = cfg.interval;
+
+        const g = cfg.gratis || {};
+        document.getElementById('gratisActive').checked = Boolean(g.active);
+        document.getElementById('gratisInterval').value = g.interval || 360;
+        const sites = Array.isArray(g.sitesEnabled) ? g.sitesEnabled : [];
+        document.getElementById('gratis-site-nl').checked = sites.includes('nl');
+        document.getElementById('gratis-site-be').checked = sites.includes('be');
+        document.getElementById('gratis-site-tp').checked = sites.includes('tp');
+        document.getElementById('gratisOnlyInStock').value = String(g.onlyInStock !== false);
+        document.getElementById('gratisOnlyNew').value = String(Boolean(g.onlyNew));
+        document.getElementById('gratisOnlyNewDays').value = g.onlyNewDays || 7;
+        document.getElementById('gratisNotifyEmpty').value = String(Boolean(g.notifyEmpty));
+      } catch (err) {
+        showToast('Instellingen laden mislukt: server niet bereikbaar', 'error');
+      }
+    }
+
+    // Elke kaart heeft een eigen opslaan-knop die alleen de eigen velden
+    // opstuurt; de server laat niet-meegestuurde onderdelen ongemoeid.
+
+    // Telegram-ontvangers
+    document.getElementById('btnSaveTelegram').addEventListener('click', async () => {
+      const body = { telegramTargets: collectTargets() };
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Telegram-ontvangers opgeslagen!', 'success');
+          targetsDirty = false;
+          loadConfig();
+        } else {
+          showToast('Opslaan mislukt: ' + (data.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Opslaan mislukt: server niet bereikbaar', 'error');
+      }
+    });
+
+    // Scan instellingen (aanbiedingen-checker)
+    document.getElementById('btnSave').addEventListener('click', async () => {
+      const body = {
+        active: document.getElementById('active').checked,
+        interval: parseInt(document.getElementById('interval').value, 10)
+      };
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Scan-instellingen opgeslagen!', 'success');
+          loadConfig();
+        } else {
+          showToast('Opslaan mislukt: ' + (data.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Opslaan mislukt: server niet bereikbaar', 'error');
+      }
+    });
+
+    // Gratis producten checker
+    document.getElementById('btnSaveGratis').addEventListener('click', async () => {
+      const sites = [];
+      if (document.getElementById('gratis-site-nl').checked) sites.push('nl');
+      if (document.getElementById('gratis-site-be').checked) sites.push('be');
+      if (document.getElementById('gratis-site-tp').checked) sites.push('tp');
+
+      const body = {
+        gratis: {
+          active: document.getElementById('gratisActive').checked,
+          interval: parseInt(document.getElementById('gratisInterval').value, 10),
+          sitesEnabled: sites,
+          onlyInStock: document.getElementById('gratisOnlyInStock').value === 'true',
+          onlyNew: document.getElementById('gratisOnlyNew').value === 'true',
+          onlyNewDays: parseInt(document.getElementById('gratisOnlyNewDays').value, 10) || 7,
+          notifyEmpty: document.getElementById('gratisNotifyEmpty').value === 'true'
+        }
+      };
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Gratis-checker instellingen opgeslagen!', 'success');
+          loadConfig();
+        } else {
+          showToast('Opslaan mislukt: ' + (data.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Opslaan mislukt: server niet bereikbaar', 'error');
+      }
+    });
+
+    document.getElementById('btnGratisCheck').addEventListener('click', async () => {
+      const btn = document.getElementById('btnGratisCheck');
+      btn.disabled = true;
+      btn.textContent = 'Bezig...';
+      showToast('Gratis-check gestart...', 'info');
+      try {
+        const res = await fetch('/api/gratis-check', { method: 'POST' });
+        const result = await res.json();
+        if (result.success) {
+          const summary = (result.results || [])
+            .map(r => `${r.site}: ${r.afterFilter}`)
+            .join(', ') || 'geen sites ingeschakeld';
+          showToast(`Gratis-check voltooid — ${summary}`, 'success');
+        } else {
+          showToast('Gratis-check mislukt: ' + (result.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Gratis-check mislukt: server niet bereikbaar', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Controleer nu';
+      }
+      loadLogs();
+    });
+
+    document.getElementById('btnAddTarget').addEventListener('click', () => { addTargetRow(); targetsDirty = true; });
+
+    document.getElementById('btnTestTelegram').addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/test-telegram', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          const n = (data.results || []).length;
+          showToast(n > 1 ? `Testbericht verzonden naar ${n} ontvangers!` : 'Testbericht verzonden!', 'success');
+        } else {
+          showToast('Fout: ' + (data.error || 'onbekend'), 'error');
+        }
+      } catch (err) {
+        showToast('Test mislukt: server niet bereikbaar', 'error');
+      }
+    });
+
+    document.getElementById('targetsContainer').addEventListener('input', () => { targetsDirty = true; });
+
+    // --- Logs ---
+    async function loadLogs() {
+      try {
+        const res = await fetch('/api/logs');
+        const logs = await res.json();
+        document.getElementById('logContainer').innerHTML = logs.map(l =>
+          `<div class="log-entry"><span class="log-time">${formatTime(l.time)}</span> <span class="log-msg">${esc(l.message)}</span></div>`
+        ).join('') || '<div class="empty-note">Nog geen logregels.</div>';
+      } catch { /* stil */ }
+    }
+
+    loadConfig();
+    loadLogs();
+    loadVersion();
+    setInterval(loadLogs, 15000);
+  </script>
+</body>
+</html>

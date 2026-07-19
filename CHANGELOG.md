@@ -1,5 +1,81 @@
 # Changelog
 
+## [2.1.0] — 2026-07-19
+
+### Opgelost
+- `package-lock.json` opnieuw gegenereerd (was per abuis de lockfile van een
+  ander project; `npm ci` werkte toevallig omdat de dependencies gelijk waren).
+- **Gedeeld scrape-slot**: de aanbiedingen-check en de gratis-check draaien
+  nooit meer tegelijk — de tweede wacht tot de eerste klaar is (minder kans op
+  een Akamai-blokkade door parallelle request-reeksen).
+- **Verdwenen producten**: een gevolgd product dat niet meer gevonden wordt
+  behoudt zijn laatste bekende prijs/actie in het overzicht (i.p.v. alleen een
+  foutmelding), en na 3 mislukte checks op rij volgt éénmalig een
+  Telegram-melding. Duikt het product weer op, dan herstelt alles vanzelf.
+- Trekpleister-actieteksten: limiet verhoogd van 8 naar 20 unieke acties per
+  zoekopdracht, en overschrijding wordt nu gelogd i.p.v. stil afgekapt.
+- Kapotte `config.json` wordt bewaard als `config.json.corrupt` en direct
+  vervangen door een verse default-config (voorheen draaide de app stil op
+  defaults terwijl het kapotte bestand bleef staan).
+
+### Gewijzigd
+- **Instellingen-pagina**: de Telegram-kaart heeft nu een eigen
+  Opslaan-knop; elke kaart bewaart alleen z'n eigen velden. Niet-opgeslagen
+  ontvanger-invoer wordt niet langer gewist bij het opslaan van een andere
+  kaart (dirty-guard).
+- **Dashboard**: aparte statuskaarten voor de aanbiedingen-checker én de
+  gratis-checker (voorheen was alleen de eerste zichtbaar).
+- `PUID`/`PGID` uit docker-compose.yml verwijderd (deden niets; de image heeft
+  geen user-switching).
+- `.gitignore` dekt nu de volledige `config/`-map.
+- Kruisverwijzingen toegevoegd tussen de bewust verschillende
+  voorraadbepalingen in `stores.js` (purchasable) en `gratis.js`
+  (inStockFlag), zodat ze niet per ongeluk gelijkgetrokken worden.
+
+## [2.0.0] — 2026-07-19
+
+### Volledig vernieuwd (grote release)
+
+De checker is herbouwd van een pure gratis-producten-checker naar een
+volwaardige aanbiedingen-watcher voor Kruidvat NL/BE en Trekpleister, met
+behoud van alle bestaande functionaliteit.
+
+### Nieuw
+- **Productzoeker** (hoofdpagina): zoek op naam of productcode per winkel,
+  met voorraadfilter en filterchips per actie-categorie
+  (1+1 / X+Y gratis, 2e halve prijs, % korting, afgeprijsd, overig).
+- **Watchlist**: volg producten en krijg een Telegram-bericht zodra er een
+  aanbieding op zit; dezelfde actie wordt maar één keer gemeld
+  (dedup op promo-code in `notified.json`).
+- **Trekpleister-ondersteuning** in de zoeker/watchlist, inclusief
+  actietekst via het PromotionBox-endpoint.
+- **Meerdere pagina's**: Zoeken, Gevolgde producten en Instellingen, in
+  Kruidvat-achtige huisstijl.
+- "Gratis verzending" telt niet meer als actie.
+
+### Behouden uit v1.x
+- De **gratis-producten-checker** ("Geen prijs aanwezig", prijsfilter
+  0–0,48) draait ongewijzigd verder, nu als onderdeel van de
+  Instellingen-pagina met eigen schakelaar, interval en filters.
+
+### Migratie vanaf v1.x — automatisch
+- Een bestaande `config.json` van v1.x wordt bij de eerste start herkend en
+  omgezet: Telegram-ontvangers (ook het oude losse botId/chatId-formaat),
+  interval, actief-status, sites en alle filters verhuizen naar de
+  gratis-checker. `seen.json` wordt ongewijzigd overgenomen.
+- Een volume dat nog op `/config` gemount staat wordt automatisch herkend;
+  aanpassen van de compose-file is niet nodig.
+
+### Technisch
+- Kruidvat-data via server-side gerenderde `spartacus-app-state` JSON op
+  `/search/<term>` (zoekterm in het pad; querystring wordt door de
+  edge-cache genegeerd).
+- Voorraadstatus op basis van `purchasable` + `stock.stockLevelStatus`
+  (het `inStockFlag`-veld bleek onbetrouwbaar voor reguliere producten).
+- Config opgesplitst: `config.json` (instellingen) en `watchlist.json`
+  (gevolgde producten).
+
+
 Versiebeheer: elke aanpassing krijgt een nieuwe **minor** versie (major alleen
 bij ingrijpende/brekende wijzigingen). De actieve versie staat in de
 projectroot als map `<versienummer>/`; oudere versies worden gearchiveerd in

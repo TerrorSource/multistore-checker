@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multistore Checker — Gevolgde producten</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="brand-kv">multistore</span><span class="brand-pw">Checker</span></div>
+      <nav class="topnav">
+        <a href="/">Zoeken</a>
+        <a href="/gevolgd">Gevolgde producten</a>
+        <a href="/instellingen">Instellingen</a>
+      </nav>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h2 id="watchlistTitle">Gevolgde producten</h2>
+      <div class="product-list" id="watchlist">
+        <div class="empty-note">Laden...</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btnCheckNow">Controleer nu</button>
+      </div>
+    </div>
+
+    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span></footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/app.js"></script>
+  <script>
+    let watchlistItems = [];
+
+    function renderWatchlist() {
+      const c = document.getElementById('watchlist');
+      const deals = watchlistItems.filter(i => i.lastStatus && i.lastStatus.promoLabel).length;
+      document.getElementById('watchlistTitle').textContent =
+        `Gevolgde producten (${watchlistItems.length}${deals ? `, ${deals} in de aanbieding` : ''})`;
+
+      if (watchlistItems.length === 0) {
+        c.innerHTML = '<div class="empty-note">Nog geen producten. Ga naar <a href="/">Zoeken</a> en klik op "+ Volgen".</div>';
+        return;
+      }
+      c.innerHTML = watchlistItems.map(i => {
+        const s = i.lastStatus;
+        let statusHtml = '<span class="badge nostock">nog niet gecheckt</span>';
+        if (s) {
+          if (s.error) {
+            statusHtml = `<span class="badge err">${esc(s.error)}</span>`;
+          } else {
+            const promoBadge = s.promoLabel
+              ? `<span class="badge promo">${esc(s.promoLabel)}${s.promoEnd ? ' · t/m ' + esc(s.promoEnd) : ''}</span>`
+              : '';
+            const stockBadge = s.inStock === false
+              ? `<span class="badge nostock">niet op voorraad</span>` : '';
+            statusHtml = `${priceHtml(s.priceFormatted, s.oldPriceFormatted)} ${promoBadge} ${stockBadge}`;
+          }
+        }
+        return `<div class="product-row">
+          ${productImageHtml(i)}
+          <div class="product-info">
+            <div class="pname"><a href="${esc(i.url || '#')}" target="_blank" rel="noopener">${esc(i.name)}</a></div>
+            <div class="pmeta">
+              <span class="badge site">${esc(SITE_NAMES[i.site] || i.site)}</span>
+              ${statusHtml}
+            </div>
+            ${s && s.checkedAt ? `<div class="checked-at">gecheckt: ${formatTime(s.checkedAt)}</div>` : ''}
+          </div>
+          <div class="product-actions">
+            <button class="btn-icon" title="Niet meer volgen" data-site="${esc(i.site)}" data-code="${esc(i.code)}">✕</button>
+          </div>
+        </div>`;
+      }).join('');
+
+      c.querySelectorAll('button[data-site]').forEach(btn => {
+        btn.addEventListener('click', () => removeFromWatchlist(btn.dataset.site, btn.dataset.code));
+      });
+    }
+
+    async function loadWatchlist() {
+      try {
+        const res = await fetch('/api/watchlist');
+        const data = await res.json();
+        watchlistItems = data.watchlist || [];
+        renderWatchlist();
+      } catch (err) {
+        document.getElementById('watchlist').innerHTML =
+          '<div class="empty-note">Watchlist laden mislukt.</div>';
+      }
+    }
+
+    async function removeFromWatchlist(site, code) {
+      try {
+        const res = await fetch(`/api/watchlist/${encodeURIComponent(site)}/${encodeURIComponent(code)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Product verwijderd', 'success');
+          await loadWatchlist();
+        } else {
+          showToast('Verwijderen mislukt: ' + (data.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Verwijderen mislukt: server niet bereikbaar', 'error');
+      }
+    }
+
+    document.getElementById('btnCheckNow').addEventListener('click', async () => {
+      const btn = document.getElementById('btnCheckNow');
+      btn.disabled = true;
+      btn.textContent = 'Bezig...';
+      showToast('Handmatige check gestart...', 'info');
+      try {
+        const res = await fetch('/api/check', { method: 'POST' });
+        const result = await res.json();
+        if (result.success) {
+          showToast(`Check voltooid: ${result.deals} van ${result.checked} producten in de aanbieding (${result.newDeals} nieuw gemeld)`, 'success');
+        } else {
+          showToast('Check mislukt: ' + (result.error || 'onbekende fout'), 'error');
+        }
+      } catch (err) {
+        showToast('Check mislukt: server niet bereikbaar', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Controleer nu';
+      }
+      loadWatchlist();
+    });
+
+    // Na een geplande check op de achtergrond ook de lijst verversen.
+    let lastCheckStamp = null;
+    async function pollStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const s = await res.json();
+        if (s.lastCheck && s.lastCheck !== lastCheckStamp) {
+          if (lastCheckStamp !== null) loadWatchlist();
+          lastCheckStamp = s.lastCheck;
+        }
+      } catch { /* stil */ }
+    }
+
+    loadWatchlist();
+    loadVersion();
+    setInterval(pollStatus, 15000);
+  </script>
+</body>
+</html>

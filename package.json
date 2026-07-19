@@ -1,7 +1,7 @@
 {
   "name": "multistore-checker",
-  "version": "1.13.0",
-  "description": "Docker-based Kruidvat & Trekpleister free product checker with Telegram notifications",
+  "version": "2.1.0",
+  "description": "Docker-based promotion & free product checker for Kruidvat NL/BE and Trekpleister with product search, watchlist and Telegram notifications",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
