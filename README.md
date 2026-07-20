@@ -1,9 +1,9 @@
 # Multistore Checker
 
 Docker-container die producten van de A.S. Watson-drogisterijen — **Kruidvat
-NL**, **Kruidvat BE** en **Trekpleister** — volgt en een Telegram-bericht
-stuurt zodra een gevolgd product in de aanbieding is (1+1 gratis, 2e halve
-prijs, X% korting of een afgeprijsde prijs).
+NL**, **Kruidvat BE**, **Trekpleister** en **ICI PARIS XL** — volgt en een
+Telegram-bericht stuurt zodra een gevolgd product in de aanbieding is (1+1
+gratis, 2e halve prijs, X% korting of een afgeprijsde prijs).
 
 ## Upgraden vanaf v1.x
 
@@ -23,8 +23,9 @@ stellen:
 ## Functies
 
 - **Zoeken** (hoofdpagina): producten zoeken op naam of productcode, per
-  winkel (Kruidvat NL/BE, Trekpleister), met statusbalk en een filter om
-  producten die niet op voorraad zijn ook te tonen (standaard verborgen)
+  winkel (Kruidvat NL/BE, Trekpleister, ICI PARIS XL), met statusbalk en een
+  filter om producten die niet op voorraad zijn ook te tonen (standaard
+  verborgen)
 - **Actie-categorieën**: elke aanbieding wordt ingedeeld in een categorie
   (1+1 / X+Y gratis, 2e halve prijs, % korting, afgeprijsd, overig) waarop je
   in de zoekresultaten kunt filteren. "Gratis verzending" telt niet als
@@ -44,7 +45,7 @@ stellen:
 
 ## Techniek
 
-**Kruidvat NL/BE** draaien op het SAP Spartacus-platform. De losse
+**Kruidvat NL/BE en ICI PARIS XL** draaien op het SAP Spartacus-platform. De losse
 product-API zit achter Akamai Bot Manager, maar de zoekpagina rendert alle
 productdata server-side als JSON in `<script id="spartacus-app-state">`. De
 app haalt per gevolgd product `https://www.kruidvat.nl/search/<productcode>`
@@ -52,6 +53,14 @@ op (de zoekterm moet in het URL-pad staan; de querystring-variant wordt door
 de edge-cache genegeerd) en leest daar prijs, voorraad en `topPromotion` uit.
 `promoCode` is uniek per actieperiode en wordt gebruikt om te onthouden wat
 al gemeld is (`/data/notified.json`).
+
+**ICI PARIS XL** wijkt binnen Spartacus op drie punten af (afgevangen in
+`stores.js`): productcodes hebben een `BP_`-prefix, er is geen
+`purchasable`-veld (voorraad komt uit `stock.stockLevelStatus`), en
+`topPromotion` staat op vrijwel álle producten zonder tekst — alleen een
+`reward` met `formattedRewardValue` ("35%") telt als echte actie. Levert de
+feed `value: 0` ("Kortingsprijs: Gratis" op de site), dan wordt de normale
+prijs uit `oldValue` getoond.
 
 **Trekpleister** draait nog op het oude platform: productdata staat in
 data-attributen van `<e2-impression-tracker>` in de HTML-tegels

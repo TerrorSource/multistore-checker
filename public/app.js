@@ -1,6 +1,6 @@
 // Gedeelde helpers voor alle pagina's.
 
-const SITE_NAMES = { nl: 'Kruidvat NL', be: 'Kruidvat BE', tp: 'Trekpleister' };
+const SITE_NAMES = { nl: 'Kruidvat NL', be: 'Kruidvat BE', tp: 'Trekpleister', ici: 'ICI PARIS XL' };
 
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')

@@ -1,7 +1,7 @@
 // Winkel-scrapers voor de A.S. Watson-drogisterijen.
 //
-// Kruidvat NL/BE draaien op het Spartacus-platform (Angular Universal): de
-// productdata staat server-side gerenderd als JSON in
+// Kruidvat NL/BE en ICI PARIS XL draaien op het Spartacus-platform (Angular
+// Universal): de productdata staat server-side gerenderd als JSON in
 // <script id="spartacus-app-state">. De losse OCC product-API zit achter
 // Akamai Bot Manager en is niet rechtstreeks bruikbaar.
 //
@@ -37,6 +37,19 @@ const siteConfigs = {
     displayName: 'Trekpleister',
     domain: 'https://www.trekpleister.nl',
     platform: 'legacy'
+  },
+  // ICI PARIS XL (ook A.S. Watson) draait op hetzelfde Spartacus-platform als
+  // Kruidvat. Let op de afwijkingen: productcodes hebben een BP_-prefix, er is
+  // géén purchasable-veld (stockStatusOf valt terug op stockLevelStatus, wat
+  // hier klopt) en topPromotion staat op vrijwel ÁLLE producten — alleen een
+  // reward met formattedRewardValue is daar een echte actie (zie
+  // mapSpartacusProduct).
+  ici: {
+    key: 'ici',
+    displayName: 'ICI PARIS XL',
+    domain: 'https://www.iciparisxl.nl',
+    platform: 'spartacus',
+    searchBase: 'https://www.iciparisxl.nl/search/'
   }
 };
 
@@ -137,15 +150,25 @@ function mapSpartacusProduct(p, site) {
 
   const price = p.price || {};
 
-  // topPromotion is aanwezig zodra er een actie loopt (1+1, 2e halve prijs,
-  // X% korting, ...). badge.headline is de leesbare actietekst van de site.
+  // topPromotion bij Kruidvat: aanwezig zodra er een actie loopt, met de
+  // leesbare actietekst in badge.headline (1+1, 2e halve prijs, X% korting).
+  // Bij ICI PARIS XL staat topPromotion echter op vrijwel ALLE producten en
+  // ontbreekt elke tekst; daar is alleen een reward met formattedRewardValue
+  // (bv. "35%" + rewardType DISCOUNT) een echte actie. Zonder tekst én zonder
+  // reward-waarde telt de promo daarom niet mee (de doorgestreepte-prijs-
+  // fallback 'afgeprijsd' vangt prijsverlagingen alsnog op).
   const tp = p.topPromotion;
   let promo = null;
   if (tp) {
-    const headline = (tp.badge && tp.badge.headline) || tp.title || tp.name || 'Aanbieding';
-    const category = classifyPromo(headline);
+    let headline = (tp.badge && tp.badge.headline) || tp.title || tp.name || null;
+    if (!headline && tp.reward && tp.reward.formattedRewardValue) {
+      headline = tp.reward.rewardType === 'DISCOUNT'
+        ? `${tp.reward.formattedRewardValue} korting`
+        : tp.reward.formattedRewardValue;
+    }
+    const category = headline ? classifyPromo(headline) : null;
     // Alleen 'gratis verzending' is geen echte aanbieding.
-    if (category !== 'verzending') {
+    if (headline && category !== 'verzending') {
       promo = {
         headline,
         category,
@@ -164,9 +187,22 @@ function mapSpartacusProduct(p, site) {
     ? ((primary.list && primary.list.url) || (primary.thumbnail && primary.thumbnail.url) || (primary.product && primary.product.url) || null)
     : null;
 
-  const priceValue = (typeof price.value === 'number') ? price.value : null;
+  let priceValue = (typeof price.value === 'number') ? price.value : null;
+  let priceFormatted = price.formattedValue || null;
   // oldValue is gevuld bij een afgeprijsd product (doorgestreepte prijs).
-  const oldPriceValue = (typeof price.oldValue === 'number') ? price.oldValue : null;
+  let oldPriceValue = (typeof price.oldValue === 'number') ? price.oldValue : null;
+  let oldPriceFormatted = price.formattedOldValue || null;
+  // ICI-datafout (waargenomen 2026-06): de feed levert soms value 0
+  // ("Kortingsprijs: Gratis" op de site zelf) met de normale prijs in
+  // oldValue. €0 is daar nooit een echte prijs: toon dan de normale prijs
+  // als actuele prijs, zonder afgeprijsd-claim. Herstelt vanzelf zodra de
+  // feed weer echte prijzen geeft.
+  if (site.key === 'ici' && priceValue === 0 && oldPriceValue != null) {
+    priceValue = oldPriceValue;
+    priceFormatted = oldPriceFormatted;
+    oldPriceValue = null;
+    oldPriceFormatted = null;
+  }
   const isMarkdown = oldPriceValue != null && priceValue != null && oldPriceValue > priceValue;
 
   return {
@@ -175,9 +211,9 @@ function mapSpartacusProduct(p, site) {
     url,
     image,
     price: priceValue,
-    priceFormatted: price.formattedValue || null,
+    priceFormatted,
     oldPrice: oldPriceValue,
-    oldPriceFormatted: price.formattedOldValue || null,
+    oldPriceFormatted,
     // Categorie van de actie (sleutel uit PROMO_CATEGORIES), of null als het
     // product geen echte aanbieding heeft. Een doorgestreepte prijs zonder
     // actie-badge telt als 'afgeprijsd'.

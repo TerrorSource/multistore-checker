@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.2.0] — 2026-07-20
+
+### Toegevoegd
+- **ICI PARIS XL** als vierde winkel in de zoeker en de watchlist. ICI draait
+  op hetzelfde Spartacus-platform als Kruidvat; de bestaande parser werkt er
+  direct op. De gratis-producten-checker blijft bewust Kruidvat/Trekpleister
+  (het "geen prijs"-fenomeen bestaat daar niet).
+
+### Bijzonderheden ICI (afgevangen in `stores.js`)
+- Productcodes hebben een `BP_`-prefix (bv. `BP_1136321`).
+- Er is geen `purchasable`-veld; voorraad komt uit `stock.stockLevelStatus`
+  (de bestaande fallback in `stockStatusOf`).
+- `topPromotion` staat op vrijwel álle producten, zonder tekst-headline.
+  Alleen een `reward` met `formattedRewardValue` telt als echte actie; het
+  label wordt daaruit opgebouwd ("35% korting"). Promo's zonder tekst én
+  zonder reward-waarde tellen niet mee (voorheen zouden die het generieke
+  label "Aanbieding" krijgen — dat zou bij ICI élk product als actie melden).
+- De ICI-feed levert soms `value: 0` ("Kortingsprijs: Gratis" op de site
+  zelf) met de normale prijs in `oldValue`; €0 wordt dan vervangen door de
+  normale prijs, zonder afgeprijsd-claim.
+
 ## [2.1.0] — 2026-07-19
 
 ### Opgelost
