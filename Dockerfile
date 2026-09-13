@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:26-alpine
 
 # su-exec: na het rechtzetten van de volume-rechten (als root) verder draaien
 # als de onbevoorrechte 'node'-gebruiker. Zie entrypoint.sh.
