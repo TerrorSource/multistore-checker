@@ -103,6 +103,8 @@ function telegramFailure(message) {
   logger(`⚠️ ${message}`);
 }
 
+// Geeft { ok, error } terug; elke uitkomst werkt ook telegramState bij, zodat
+// geplande meldingen én de testknop dezelfde waarschuwingsbalk voeden.
 async function sendTelegram(botId, chatId, text, parseMode = null) {
   const body = { chat_id: chatId, text, disable_web_page_preview: true };
   if (parseMode) body.parse_mode = parseMode;
@@ -114,15 +116,16 @@ async function sendTelegram(botId, chatId, text, parseMode = null) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
-      telegramFailure(`Telegram weigerde een bericht voor chat ${chatId}: ${data.description || `HTTP ${res.status}`}`);
-      return false;
+      const error = data.description || `HTTP ${res.status}`;
+      telegramFailure(`Telegram weigerde een bericht voor chat ${chatId}: ${error}`);
+      return { ok: false, error };
     }
     telegramState.lastError = null;
     telegramState.lastSuccessAt = new Date().toISOString();
-    return true;
+    return { ok: true, error: null };
   } catch (err) {
     telegramFailure(`Telegram niet bereikbaar (chat ${chatId}): ${err.message}`);
-    return false;
+    return { ok: false, error: err.message };
   }
 }
 

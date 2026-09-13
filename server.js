@@ -428,6 +428,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Nette URL's voor de aparte pagina's.
 app.get('/gevolgd', (req, res) => res.sendFile(path.join(__dirname, 'public', 'gevolgd.html')));
 app.get('/instellingen', (req, res) => res.sendFile(path.join(__dirname, 'public', 'instellingen.html')));
+// Browsers die geen <link rel="icon"> lezen vragen /favicon.ico op.
+app.get('/favicon.ico', (req, res) => res.redirect(301, '/favicon.svg'));
+
+// Lichte health-check voor Docker/monitoring: geen logs of resultaten.
+app.get('/healthz', (req, res) => res.json({ ok: true, version: APP_VERSION }));
 
 // --- Config -----------------------------------------------------------------
 
@@ -602,31 +607,15 @@ app.post('/api/test-telegram', async (req, res) => {
   if (targets.length === 0) {
     return res.json({ success: false, error: 'Geen Telegram-ontvangers geconfigureerd' });
   }
+  // Via dezelfde sendTelegram als de geplande meldingen, zodat een mislukte
+  // test ook de waarschuwingsbalk zet (en een geslaagde hem weer wist).
   const perTarget = [];
   for (const [i, t] of targets.entries()) {
-    try {
-      const response = await stores.net.fetch(`https://api.telegram.org/bot${t.botId}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: t.chatId,
-          text: `✅ Testbericht vanuit de Multistore Checker! (v${APP_VERSION}, ontvanger ${i + 1}/${targets.length})`
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      perTarget.push({
-        chatId: t.chatId,
-        ok: Boolean(data.ok),
-        error: data.ok ? null : (data.description || `HTTP ${response.status}`)
-      });
-    } catch (err) {
-      perTarget.push({ chatId: t.chatId, ok: false, error: err.message });
-    }
+    const r = await watcher.sendTelegram(t.botId, t.chatId,
+      `✅ Testbericht vanuit de Multistore Checker! (v${APP_VERSION}, ontvanger ${i + 1}/${targets.length})`);
+    perTarget.push({ chatId: t.chatId, ok: r.ok, error: r.error });
   }
   const failed = perTarget.filter(r => !r.ok);
-  if (failed.length) {
-    addLog(`⚠️ Telegram-test mislukt: ${failed.map(f => `${f.chatId}: ${f.error}`).join('; ')}`);
-  }
   res.json({
     success: failed.length === 0,
     results: perTarget,

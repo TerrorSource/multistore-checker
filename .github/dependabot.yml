@@ -9,3 +9,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Basisimage in de Dockerfile (node:22-alpine).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

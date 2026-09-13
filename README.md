@@ -97,6 +97,8 @@ Voor alle verzoeken is de volledige browser-headerset vereist (inclusief
   zetten en draait daarna als de onbevoorrechte gebruiker `node`
   (zie `entrypoint.sh`). Lukt dat niet, dan valt hij terug op root met een
   waarschuwing in het log.
+- `GET /healthz` is een lichte health-check (`{ ok, version }`) voor Docker
+  en monitoring; `/api/status` bevat daarnaast de volledige status en logs.
 
 ## Starten
 

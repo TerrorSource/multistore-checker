@@ -10,11 +10,20 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# commit-git.sh pusht main en de versie-tag vlak na elkaar; dat gaf twee
+# identieke multi-arch builds tegelijk (en één keer een hangende arm64-build).
+# Eén groep zonder cancel: de runs wachten netjes op elkaar, en de tweede
+# hergebruikt via de buildx-cache de lagen van de eerste.
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
+
 jobs:
   # Vangt een kapotte release af vóór er een image naar GHCR gaat:
   # syntax-check van alle modules + een smoke-test van de draaiende server.
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -53,6 +62,9 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
+    # Een geëmuleerde arm64-build kan (zelden) blijven hangen; dan liever
+    # falen na een half uur dan de standaard 6 uur wachten.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -91,5 +103,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

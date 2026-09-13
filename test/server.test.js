@@ -29,6 +29,36 @@ test('status toont de versie uit package.json en een lege watchlist', async () =
   assert.equal(typeof s.update, 'object');
 });
 
+test('healthz is licht en favicon.ico verwijst door naar de svg', async () => {
+  const h = await get('/healthz');
+  assert.deepEqual(h, { ok: true, version });
+  const r = await fetch(base + '/favicon.ico', { redirect: 'manual' });
+  assert.equal(r.status, 301);
+  assert.equal(r.headers.get('location'), '/favicon.svg');
+  const svg = await fetch(base + '/favicon.svg');
+  assert.equal(svg.status, 200);
+  assert.match(svg.headers.get('content-type'), /image\/svg\+xml/);
+});
+
+test('Telegram-test zet en wist de waarschuwing via dezelfde weg als meldingen', async () => {
+  await post('/api/config', { telegramTargets: [{ botId: 'B', chatId: 'C' }] });
+  stores.net.fetch = makeFetch([['api.telegram.org', () => mockResponse({ ok: false, description: 'Unauthorized' }, { ok: true, status: 401 })]]);
+  const fail = await post('/api/test-telegram');
+  assert.equal(fail.success, false);
+  assert.match(fail.error, /C: Unauthorized/);
+  let s = await get('/api/status');
+  assert.match(s.telegram.lastError.message, /Unauthorized/);
+  assert.ok(s.logs.some(l => /Telegram weigerde/.test(l.message)), 'fout staat in het dashboard-log');
+
+  stores.net.fetch = makeFetch([['api.telegram.org', () => mockResponse({ ok: true })]]);
+  const ok = await post('/api/test-telegram');
+  assert.equal(ok.success, true);
+  assert.equal(ok.results[0].ok, true);
+  s = await get('/api/status');
+  assert.equal(s.telegram.lastError, null, 'geslaagde test wist de waarschuwing');
+  await post('/api/config', { telegramTargets: [] });
+});
+
 test('config: halve ontvanger wordt geweigerd, geldige wordt opgeslagen', async () => {
   const bad = await post('/api/config', { telegramTargets: [{ chatId: '1' }] });
   assert.equal(bad.success, false);

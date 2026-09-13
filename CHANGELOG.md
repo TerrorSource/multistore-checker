@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.5.0] — 2026-09-13
+
+### CI / build
+- **Runs draaien na elkaar** (`concurrency`-groep): `commit-git.sh` pusht
+  `main` en de versie-tag vlak na elkaar, wat twee identieke multi-arch
+  builds tegelijk gaf en één keer een urenlang hangende arm64-build.
+- **`timeout-minutes`** op de jobs (test 10, build 30): een hang faalt nu na
+  een half uur i.p.v. na de standaard 6 uur.
+- **Buildx-cache** via GitHub Actions (`type=gha`): de tweede build hergebruikt
+  de lagen van de eerste, zodat de geëmuleerde arm64-stap grotendeels
+  overgeslagen wordt.
+- Dependabot bewaakt nu ook de Docker-basisimage (`node:22-alpine`).
+
+### Opgelost / verfijnd
+- **Telegram-test loopt via dezelfde `sendTelegram`** als de geplande
+  meldingen: een mislukte test zet nu ook de waarschuwingsbalk (en een
+  geslaagde wist hem weer). `sendTelegram` geeft `{ ok, error }` terug.
+- **Favicon** (rood met wit vinkje, `favicon.svg`); `/favicon.ico` verwijst
+  ernaar door, dus geen 404 meer per pagina-load.
+- **`/healthz`**: lichte health-check (alleen `ok` + versie); de Docker-
+  healthcheck gebruikt die i.p.v. het volledige `/api/status`.
+
 ## [2.4.0] — 2026-09-13
 
 ### Opgelost
