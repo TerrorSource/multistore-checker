@@ -1,9 +1,12 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { siteConfigs, searchProducts, checkProduct } = require('./stores');
-const { runCheck, validTargets } = require('./watcher');
+const stores = require('./stores');
+const { siteConfigs, searchProducts, checkProduct } = stores;
+const watcher = require('./watcher');
+const { runCheck, validTargets } = watcher;
 const { runGratisCheck, gratisSites } = require('./gratis');
+const { readJson, writeJsonAtomic } = require('./storage');
 const { version: APP_VERSION } = require('./package.json');
 
 const { DATA_DIR } = require('./datadir');
@@ -28,6 +31,14 @@ const INITIAL_GRATIS_DELAY_MS = 90 * 1000;
 // Harde bovengrens per check-run: vangnet naast de fetch-timeouts, zodat een
 // run nooit eindeloos de status "bezig" kan houden.
 const RUN_CAP_MS = 45 * 60 * 1000;
+
+// Update-check: eens per dag de nieuwste versie-tag op GitHub ophalen en in
+// het dashboard melden als die hoger is dan de draaiende versie.
+// Uitschakelen met UPDATE_CHECK=false; andere repo via UPDATE_REPO.
+const UPDATE_REPO = process.env.UPDATE_REPO || 'TerrorSource/multistore-checker';
+const UPDATE_CHECK_ENABLED = String(process.env.UPDATE_CHECK || 'true').toLowerCase() !== 'false';
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHECK_INITIAL_DELAY_MS = 30 * 1000;
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -96,69 +107,67 @@ function migrateV1Config(data) {
   };
 }
 
+function saveConfig(config) {
+  writeJsonAtomic(CONFIG_FILE, config);
+}
+
 function loadConfig() {
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      let data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-
-      const migrated = migrateV1Config(data);
-      if (migrated) {
-        console.log('Config van multistorechecker v1.x gevonden; instellingen gemigreerd naar v2 (gratis-checker).');
-        data = migrated;
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2));
-      }
-
-      if (!Array.isArray(data.telegramTargets)) data.telegramTargets = [];
-      // Migratie v1.0 -> v1.1: watchlist zat eerst in config.json en heeft
-      // nu een eigen bestand.
-      if (Array.isArray(data.watchlist)) {
-        if (!fs.existsSync(WATCHLIST_FILE)) {
-          fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(data.watchlist, null, 2));
-        }
-        delete data.watchlist;
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...defaultConfig, ...data }, null, 2));
-      }
-      // Geneste gratis-instellingen apart mergen zodat nieuwe velden hun
-      // standaardwaarde krijgen.
-      data.gratis = { ...defaultGratis, ...(data.gratis || {}) };
-      return { ...defaultConfig, ...data };
-    }
-  } catch (err) {
-    console.error('Config laden mislukt:', err.message);
-    // Onleesbare config: bewaar het kapotte bestand als .corrupt en schrijf
-    // meteen een verse default-config terug, zodat de app niet stil op
-    // defaults draait terwijl er een kapot bestand blijft staan.
+  const { data: raw, corrupt } = readJson(CONFIG_FILE, null);
+  if (corrupt) {
+    // Onleesbare config: het kapotte bestand is al als .corrupt bewaard;
+    // meteen een verse default-config terugschrijven zodat de app niet stil
+    // op defaults draait terwijl er een kapot bestand blijft staan.
     try {
-      if (fs.existsSync(CONFIG_FILE)) {
-        fs.copyFileSync(CONFIG_FILE, CONFIG_FILE + '.corrupt');
-        console.error(`Kapotte config bewaard als ${CONFIG_FILE}.corrupt; defaults teruggeschreven.`);
-      }
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...defaultConfig, gratis: { ...defaultGratis } }, null, 2));
+      saveConfig({ ...defaultConfig, gratis: { ...defaultGratis } });
+      console.error('Default-config teruggeschreven.');
     } catch (writeErr) {
       console.error('Default-config terugschrijven mislukt:', writeErr.message);
     }
+    return { ...defaultConfig, gratis: { ...defaultGratis } };
   }
-  return { ...defaultConfig, gratis: { ...defaultGratis } };
-}
+  if (!raw || typeof raw !== 'object') {
+    return { ...defaultConfig, gratis: { ...defaultGratis } };
+  }
 
-function saveConfig(config) {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-}
-
-function loadWatchlist() {
+  let data = raw;
   try {
-    if (fs.existsSync(WATCHLIST_FILE)) {
-      const data = JSON.parse(fs.readFileSync(WATCHLIST_FILE, 'utf8'));
-      if (Array.isArray(data)) return data;
+    const migrated = migrateV1Config(data);
+    if (migrated) {
+      console.log('Config van multistorechecker v1.x gevonden; instellingen gemigreerd naar v2 (gratis-checker).');
+      data = migrated;
+      saveConfig(data);
+    }
+
+    if (!Array.isArray(data.telegramTargets)) data.telegramTargets = [];
+    // Migratie v1.0 -> v1.1: watchlist zat eerst in config.json en heeft
+    // nu een eigen bestand.
+    if (Array.isArray(data.watchlist)) {
+      if (!fs.existsSync(WATCHLIST_FILE)) {
+        writeJsonAtomic(WATCHLIST_FILE, data.watchlist);
+      }
+      delete data.watchlist;
+      saveConfig({ ...defaultConfig, ...data });
     }
   } catch (err) {
-    console.error('Watchlist laden mislukt:', err.message);
+    console.error('Config migreren mislukt:', err.message);
   }
-  return [];
+  // Geneste gratis-instellingen apart mergen zodat nieuwe velden hun
+  // standaardwaarde krijgen.
+  data.gratis = { ...defaultGratis, ...(data.gratis || {}) };
+  return { ...defaultConfig, ...data };
+}
+
+// Bij een kapotte watchlist wordt het bestand als .corrupt bewaard (zie
+// storage.js) en start de app met een lege lijst; de eerstvolgende save
+// overschrijft dus nooit stilzwijgend de enige kopie.
+function loadWatchlist() {
+  const { data, corrupt } = readJson(WATCHLIST_FILE, []);
+  if (corrupt) console.error('Watchlist onleesbaar; gestart met een lege lijst (backup: watchlist.json.corrupt).');
+  return Array.isArray(data) ? data : [];
 }
 
 function saveWatchlist(watchlist) {
-  fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(watchlist, null, 2));
+  writeJsonAtomic(WATCHLIST_FILE, watchlist);
 }
 
 let config = loadConfig();
@@ -186,16 +195,11 @@ let logs = [];
 const MAX_LOGS = 100;
 
 function loadState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      if (Array.isArray(s.logs)) logs = s.logs.slice(0, MAX_LOGS);
-      lastCheckResult = s.lastCheckResult || null;
-      lastGratisResult = s.lastGratisResult || null;
-    }
-  } catch (err) {
-    console.error('state.json laden mislukt:', err.message);
-  }
+  const { data: s } = readJson(STATE_FILE, null);
+  if (!s || typeof s !== 'object') return;
+  if (Array.isArray(s.logs)) logs = s.logs.slice(0, MAX_LOGS);
+  lastCheckResult = s.lastCheckResult || null;
+  lastGratisResult = s.lastGratisResult || null;
 }
 
 // Schrijven gebeurt uitgesteld (max. 1x per seconde), zodat een reeks
@@ -206,11 +210,13 @@ function saveStateSoon() {
   saveStateTimer = setTimeout(() => {
     saveStateTimer = null;
     try {
-      fs.writeFileSync(STATE_FILE, JSON.stringify({ logs, lastCheckResult, lastGratisResult }, null, 2));
+      writeJsonAtomic(STATE_FILE, { logs, lastCheckResult, lastGratisResult });
     } catch (err) {
       console.error('state.json opslaan mislukt:', err.message);
     }
   }, 1000);
+  // Een openstaande timer mag een nette afsluiting niet tegenhouden.
+  if (saveStateTimer.unref) saveStateTimer.unref();
 }
 
 function addLog(message) {
@@ -222,6 +228,55 @@ function addLog(message) {
 }
 
 loadState();
+// Telegram-fouten uit de watcher/gratis-checker in het dashboard-log.
+watcher.setLogger(addLog);
+
+// --- Update-check -----------------------------------------------------------------------
+
+const updateInfo = { latest: null, available: false, url: `https://github.com/${UPDATE_REPO}/releases`, checkedAt: null };
+
+function parseSemver(v) {
+  const m = String(v).match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function compareSemver(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+// Haalt de tags van de repo op en bepaalt de hoogste versie. Stil bij fouten:
+// een mislukte update-check mag nooit iets anders beïnvloeden.
+async function checkForUpdate() {
+  try {
+    const res = await stores.net.fetch(`https://api.github.com/repos/${UPDATE_REPO}/tags?per_page=50`, {
+      headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': `multistore-checker/${APP_VERSION}` }
+    });
+    if (!res.ok) return;
+    const tags = await res.json();
+    if (!Array.isArray(tags)) return;
+    const versions = tags.map(t => parseSemver(t && t.name)).filter(Boolean).sort(compareSemver);
+    if (versions.length === 0) return;
+    const latest = versions[versions.length - 1];
+    const current = parseSemver(APP_VERSION) || [0, 0, 0];
+    updateInfo.latest = latest.join('.');
+    updateInfo.available = compareSemver(latest, current) > 0;
+    updateInfo.checkedAt = new Date().toISOString();
+    if (updateInfo.available) addLog(`Nieuwe versie beschikbaar: v${updateInfo.latest} (draait: v${APP_VERSION}).`);
+  } catch (err) {
+    console.error('Update-check mislukt:', err.message);
+  }
+}
+
+function setupUpdateCheck() {
+  if (!UPDATE_CHECK_ENABLED) return;
+  setTimeout(() => {
+    checkForUpdate();
+    setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
+  }, UPDATE_CHECK_INITIAL_DELAY_MS);
+}
 
 // --- Schedulers ---------------------------------------------------------------------
 
@@ -435,12 +490,13 @@ app.post('/api/config', (req, res) => {
 app.get('/api/search', async (req, res) => {
   const term = String(req.query.q || '').trim();
   const site = String(req.query.site || 'nl');
+  const page = Math.max(0, parseInt(req.query.page, 10) || 0);
   if (!term) return res.json({ success: false, error: 'Geen zoekterm opgegeven' });
   if (!KNOWN_SITES.includes(site)) return res.json({ success: false, error: `Onbekende site: ${site}` });
 
   try {
-    const { products, total } = await withScrapeSlot(() => searchProducts(site, term));
-    res.json({ success: true, site, term, total, products });
+    const result = await withScrapeSlot(() => searchProducts(site, term, page));
+    res.json({ success: true, site, term, ...result });
   } catch (err) {
     addLog(`Zoeken naar "${term}" (${site}) mislukt: ${err.message}`);
     res.json({ success: false, error: err.message });
@@ -490,9 +546,7 @@ app.post('/api/watchlist', async (req, res) => {
         oldPriceFormatted: info.oldPriceFormatted,
         inStock: info.inStock,
         promo: info.promo,
-        promoLabel: info.promo ? info.promo.headline
-          : (info.oldPrice != null && info.price != null && info.oldPrice > info.price
-              ? `Afgeprijsd: ${info.priceFormatted} (was ${info.oldPriceFormatted})` : null),
+        promoLabel: watcher.promoLabelOf(info),
         promoEnd: null,
         checkedAt: new Date().toISOString()
       };
@@ -551,14 +605,13 @@ app.post('/api/test-telegram', async (req, res) => {
   const perTarget = [];
   for (const [i, t] of targets.entries()) {
     try {
-      const response = await fetch(`https://api.telegram.org/bot${t.botId}/sendMessage`, {
+      const response = await stores.net.fetch(`https://api.telegram.org/bot${t.botId}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: t.chatId,
           text: `✅ Testbericht vanuit de Multistore Checker! (v${APP_VERSION}, ontvanger ${i + 1}/${targets.length})`
-        }),
-        signal: AbortSignal.timeout(20000)
+        })
       });
       const data = await response.json().catch(() => ({}));
       perTarget.push({
@@ -571,6 +624,9 @@ app.post('/api/test-telegram', async (req, res) => {
     }
   }
   const failed = perTarget.filter(r => !r.ok);
+  if (failed.length) {
+    addLog(`⚠️ Telegram-test mislukt: ${failed.map(f => `${f.chatId}: ${f.error}`).join('; ')}`);
+  }
   res.json({
     success: failed.length === 0,
     results: perTarget,
@@ -597,6 +653,8 @@ app.get('/api/status', (req, res) => {
       lastCheck: lastGratisResult ? lastGratisResult.timestamp : null,
       lastResult: lastGratisResult
     },
+    telegram: watcher.getTelegramState(),
+    update: updateInfo,
     logs: logs.slice(0, 20)
   });
 });
@@ -605,9 +663,14 @@ app.get('/api/logs', (req, res) => {
   res.json(logs);
 });
 
-// Start
-app.listen(PORT, '0.0.0.0', () => {
-  addLog(`Multistore Checker v${APP_VERSION} draait op poort ${PORT}`);
-  setupScheduler(INITIAL_CHECK_DELAY_MS);
-  setupGratisScheduler(INITIAL_GRATIS_DELAY_MS);
-});
+// Start (alleen als dit het hoofdprogramma is; tests importeren de app).
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    addLog(`Multistore Checker v${APP_VERSION} draait op poort ${PORT}`);
+    setupScheduler(INITIAL_CHECK_DELAY_MS);
+    setupGratisScheduler(INITIAL_GRATIS_DELAY_MS);
+    setupUpdateCheck();
+  });
+}
+
+module.exports = { app, migrateV1Config, loadConfig, parseSemver, compareSemver, checkForUpdate, updateInfo };

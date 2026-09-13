@@ -3,6 +3,22 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Waarschuwingsbalk (o.a. Telegram-fouten) bovenaan elke pagina. */
+.warning-banner {
+  background: #fff4e5;
+  border: 1px solid #f5c26b;
+  border-left: 4px solid #e08a00;
+  color: #7a4b00;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.warning-banner[hidden] { display: none; }
+
+/* "Meer laden" onder de zoekresultaten. */
+.more-row { justify-content: center; margin-top: 12px; }
+
 :root {
   --kv-red: #e2001a;
   --kv-red-dark: #b50015;

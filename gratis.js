@@ -3,12 +3,18 @@
 // 0 - 0.48 EUR, "Geen prijs aanwezig") en meldt die via Telegram.
 
 const cheerio = require('cheerio');
-const fs = require('fs');
 const path = require('path');
-const { BROWSER_HEADERS, fetchWithTimeout, withRetry, extractSpartacusState, findSearchModel } = require('./stores');
+// Via het module-object aangeroepen (stores.net.fetch, stores.withRetry),
+// zodat tests de netwerkkant kunnen vervangen.
+const stores = require('./stores');
+const { BROWSER_HEADERS, extractSpartacusState, findSearchModel } = stores;
 const { validTargets, broadcast, sendList, escapeHTML, escapeAttr } = require('./watcher');
+const { readJson, writeJsonAtomic } = require('./storage');
 
 const { DATA_DIR } = require('./datadir');
+
+// Instelbaar (o.a. door tests): pauze tussen de sites.
+const settings = { siteDelayMs: 2000 };
 
 // Producten die zo lang niet meer in de resultaten zaten, vergeten we weer;
 // duiken ze daarna opnieuw op, dan melden we ze als nieuw. Het bestand heet
@@ -62,19 +68,13 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Structuur: { "<siteKey>": { "<productCode>": "<laatst gezien, ISO>" } }
 function loadSeen() {
-  try {
-    if (fs.existsSync(SEEN_FILE)) {
-      return JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8'));
-    }
-  } catch (err) {
-    console.error('seen.json laden mislukt:', err.message);
-  }
-  return {};
+  const { data } = readJson(SEEN_FILE, {});
+  return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
 }
 
 function saveSeen(seen) {
   try {
-    fs.writeFileSync(SEEN_FILE, JSON.stringify(seen, null, 2));
+    writeJsonAtomic(SEEN_FILE, seen);
   } catch (err) {
     console.error('seen.json opslaan mislukt:', err.message);
   }
@@ -168,8 +168,8 @@ function scrapeLegacy(html, site) {
 // caller een storing kan onderscheiden van "0 gratis producten gevonden".
 async function scrapeSite(site) {
   try {
-    const html = await withRetry(async () => {
-      const res = await fetchWithTimeout(site.checkUrl, { headers: BROWSER_HEADERS, redirect: 'follow' });
+    const html = await stores.withRetry(async () => {
+      const res = await stores.net.fetch(site.checkUrl, { headers: BROWSER_HEADERS, redirect: 'follow' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();
     });
@@ -216,7 +216,7 @@ async function runGratisCheck(config, isManual = false) {
   for (let i = 0; i < enabled.length; i++) {
     const site = gratisSites[enabled[i]];
     if (!site) continue;
-    if (i > 0) await delay(2000);
+    if (i > 0) await delay(settings.siteDelayMs);
 
     const products = await scrapeSite(site);
     if (products === null) {
@@ -270,4 +270,4 @@ async function runGratisCheck(config, isManual = false) {
   return { success: true, results, timestamp: new Date().toISOString() };
 }
 
-module.exports = { runGratisCheck, gratisSites };
+module.exports = { runGratisCheck, gratisSites, settings };

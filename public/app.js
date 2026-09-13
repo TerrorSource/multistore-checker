@@ -42,14 +42,38 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// Versienummer in de footer.
+// Gedeelde status-onderdelen op elke pagina: versienummer + update-melding in
+// de footer en de Telegram-waarschuwing bovenaan. Elke pagina roept dit aan
+// met de /api/status-respons.
+function applyStatus(s) {
+  const v = document.getElementById('appVersion');
+  if (v && s.version) v.textContent = 'v' + s.version;
+
+  const u = document.getElementById('updateNotice');
+  if (u) {
+    if (s.update && s.update.available) {
+      u.innerHTML = ` · <a href="${esc(s.update.url)}" target="_blank" rel="noopener">nieuwe versie v${esc(s.update.latest)} beschikbaar</a>`;
+    } else {
+      u.textContent = '';
+    }
+  }
+
+  const w = document.getElementById('telegramWarning');
+  if (w) {
+    const e = s.telegram && s.telegram.lastError;
+    if (e) {
+      w.textContent = `⚠️ Telegram-fout (${formatTime(e.time)}): ${e.message}`;
+      w.hidden = false;
+    } else {
+      w.hidden = true;
+    }
+  }
+}
+
+// Voor pagina's zonder eigen status-poll.
 async function loadVersion() {
   try {
     const res = await fetch('/api/status');
-    const s = await res.json();
-    if (s.version) {
-      const el = document.getElementById('appVersion');
-      if (el) el.textContent = 'v' + s.version;
-    }
+    applyStatus(await res.json());
   } catch { /* stil */ }
 }

@@ -19,6 +19,7 @@
   </div>
 
   <div class="container">
+    <div class="warning-banner" id="telegramWarning" hidden></div>
     <div class="status-bar">
       <div class="status-card">
         <div class="label">Aanbiedingen-checker</div>
@@ -64,7 +65,7 @@
       <div class="product-list" id="searchResults"></div>
     </div>
 
-    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span></footer>
+    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span><span id="updateNotice"></span></footer>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -72,7 +73,7 @@
   <script src="/app.js"></script>
   <script>
     let watchlistItems = [];
-    let lastSearch = { site: 'nl', products: [] };
+    let lastSearch = { site: 'nl', term: '', products: [], page: 0, total: 0, hasMore: false };
 
     // Actie-categorieën (zelfde sleutels als de server meegeeft in
     // promoCategory). Geen chip actief = geen categoriefilter.
@@ -159,11 +160,28 @@
       } else if (hidden > 0) {
         rows.push(`<div class="empty-note">${hidden} product${hidden === 1 ? '' : 'en'} verborgen door de filters.</div>`);
       }
+      // Volgende pagina ophalen zolang de winkel meer resultaten heeft.
+      const shown = lastSearch.products.length;
+      if (lastSearch.hasMore) {
+        rows.push(`<div class="btn-row more-row"><button class="btn btn-secondary" id="btnMore">Meer laden (${shown} van ${lastSearch.total})</button></div>`);
+      } else if (lastSearch.total > shown) {
+        // Kruidvat levert alleen de eerste pagina (de edge-cache negeert
+        // paginering); een specifiekere zoekterm is daar de enige weg.
+        const kv = site === 'nl' || site === 'be';
+        rows.push(`<div class="empty-note">${shown} van ${lastSearch.total} resultaten geladen${kv ? ' — Kruidvat levert alleen de eerste pagina; verfijn je zoekterm voor de rest' : ''}.</div>`);
+      }
       c.innerHTML = rows.join('');
 
       c.querySelectorAll('button[data-code]').forEach(btn => {
         btn.addEventListener('click', () => addToWatchlist(site, btn.dataset.code, btn));
       });
+      const more = document.getElementById('btnMore');
+      if (more) more.addEventListener('click', loadMore);
+    }
+
+    async function fetchPage(site, term, page) {
+      const res = await fetch(`/api/search?site=${encodeURIComponent(site)}&q=${encodeURIComponent(term)}&page=${page}`);
+      return res.json();
     }
 
     async function doSearch() {
@@ -174,10 +192,9 @@
       btn.disabled = true;
       btn.textContent = 'Zoeken...';
       try {
-        const res = await fetch(`/api/search?site=${encodeURIComponent(site)}&q=${encodeURIComponent(term)}`);
-        const data = await res.json();
+        const data = await fetchPage(site, term, 0);
         if (data.success) {
-          lastSearch = { site, products: data.products };
+          lastSearch = { site, term, products: data.products, page: data.page || 0, total: data.total || data.products.length, hasMore: Boolean(data.hasMore) };
           renderSearchResults();
           if (data.products.length === 0) showToast('Geen producten gevonden', 'info');
         } else {
@@ -188,6 +205,30 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Zoeken';
+      }
+    }
+
+    async function loadMore() {
+      const btn = document.getElementById('btnMore');
+      if (btn) { btn.disabled = true; btn.textContent = 'Laden...'; }
+      try {
+        const data = await fetchPage(lastSearch.site, lastSearch.term, lastSearch.page + 1);
+        if (data.success) {
+          // Dubbele codes (kan bij verschuivende sortering) overslaan.
+          const seen = new Set(lastSearch.products.map(p => p.code));
+          const nieuw = data.products.filter(p => !seen.has(p.code));
+          lastSearch.products = lastSearch.products.concat(nieuw);
+          lastSearch.page = data.page;
+          lastSearch.total = data.total || lastSearch.total;
+          lastSearch.hasMore = Boolean(data.hasMore) && nieuw.length > 0;
+          renderSearchResults();
+        } else {
+          showToast('Meer laden mislukt: ' + (data.error || 'onbekende fout'), 'error');
+          if (btn) { btn.disabled = false; btn.textContent = 'Meer laden'; }
+        }
+      } catch (err) {
+        showToast('Meer laden mislukt: server niet bereikbaar', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Meer laden'; }
       }
     }
 
@@ -243,7 +284,7 @@
         serverDown = false;
         showToast('Verbinding hersteld', 'success');
       }
-      if (s.version) document.getElementById('appVersion').textContent = 'v' + s.version;
+      applyStatus(s);
       const activeEl = document.getElementById('statusActive');
       activeEl.textContent = s.active ? 'Actief' : 'Inactief';
       activeEl.className = 'value ' + (s.active ? 'active' : 'inactive');

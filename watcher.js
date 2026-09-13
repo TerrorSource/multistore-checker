@@ -1,6 +1,8 @@
-const fs = require('fs');
 const path = require('path');
-const { siteConfigs, checkProduct, fetchWithTimeout, withRetry } = require('./stores');
+// Via het module-object aangeroepen (stores.checkProduct etc.), zodat tests
+// de netwerkkant kunnen vervangen zonder de module te herschrijven.
+const stores = require('./stores');
+const { readJson, writeJsonAtomic } = require('./storage');
 
 const { DATA_DIR } = require('./datadir');
 
@@ -16,8 +18,9 @@ const OUTAGE_PREFIX = '_outage:';
 // Telegram weigert berichten boven 4096 tekens; we splitsen ruim daaronder.
 const CHUNK_LIMIT = 3500;
 
-// Pauze tussen requests naar de winkels, om niet als bot geblokkeerd te raken.
-const REQUEST_DELAY_MS = 2000;
+// Instelbaar (o.a. door tests): pauze tussen requests naar de winkels, om niet
+// als bot geblokkeerd te raken.
+const settings = { requestDelayMs: 2000 };
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -31,29 +34,28 @@ function escapeAttr(text) {
 }
 
 function siteName(siteKey) {
-  return siteConfigs[siteKey] ? siteConfigs[siteKey].displayName : siteKey;
+  return stores.siteConfigs[siteKey] ? stores.siteConfigs[siteKey].displayName : siteKey;
 }
+
+// Logger-hook: server.js registreert hier addLog, zodat Telegram-fouten in
+// het dashboard-log terechtkomen i.p.v. alleen op de console.
+let logger = (msg) => console.error(msg);
+function setLogger(fn) { logger = fn; }
 
 // --- Gemelde acties -------------------------------------------------------
 
 // Structuur: { "<site>:<code>": { promoKey, headline, notifiedAt },
 //              "_outage:<site>": { since, error } }
 function loadNotified() {
-  try {
-    if (fs.existsSync(NOTIFIED_FILE)) {
-      return JSON.parse(fs.readFileSync(NOTIFIED_FILE, 'utf8'));
-    }
-  } catch (err) {
-    console.error('notified.json laden mislukt:', err.message);
-  }
-  return {};
+  const { data } = readJson(NOTIFIED_FILE, {});
+  return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
 }
 
 function saveNotified(notified) {
   try {
-    fs.writeFileSync(NOTIFIED_FILE, JSON.stringify(notified, null, 2));
+    writeJsonAtomic(NOTIFIED_FILE, notified);
   } catch (err) {
-    console.error('notified.json opslaan mislukt:', err.message);
+    logger(`notified.json opslaan mislukt: ${err.message}`);
   }
 }
 
@@ -91,23 +93,35 @@ function formatEndDate(iso) {
 
 // --- Telegram ---------------------------------------------------------------
 
+// Laatste Telegram-fout (of null), zichtbaar via /api/status en als
+// waarschuwing in het dashboard. Wordt gewist zodra een bericht weer lukt.
+const telegramState = { lastError: null, lastSuccessAt: null };
+function getTelegramState() { return telegramState; }
+
+function telegramFailure(message) {
+  telegramState.lastError = { time: new Date().toISOString(), message };
+  logger(`⚠️ ${message}`);
+}
+
 async function sendTelegram(botId, chatId, text, parseMode = null) {
   const body = { chat_id: chatId, text, disable_web_page_preview: true };
   if (parseMode) body.parse_mode = parseMode;
   try {
-    const res = await fetchWithTimeout(`https://api.telegram.org/bot${botId}/sendMessage`, {
+    const res = await stores.net.fetch(`https://api.telegram.org/bot${botId}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
-      console.error('Telegram weigerde bericht:', data.description || `HTTP ${res.status}`);
+      telegramFailure(`Telegram weigerde een bericht voor chat ${chatId}: ${data.description || `HTTP ${res.status}`}`);
       return false;
     }
+    telegramState.lastError = null;
+    telegramState.lastSuccessAt = new Date().toISOString();
     return true;
   } catch (err) {
-    console.error('Telegram fout:', err.message);
+    telegramFailure(`Telegram niet bereikbaar (chat ${chatId}): ${err.message}`);
     return false;
   }
 }
@@ -161,7 +175,7 @@ async function runCheck(config, watchlist, isManual = false) {
   const targets = validTargets(config);
 
   if (watchlist.length === 0) {
-    return { success: true, checked: 0, deals: 0, newDeals: 0, errors: 0, timestamp: new Date().toISOString() };
+    return { success: true, checked: 0, deals: 0, newDeals: 0, errors: 0, outages: [], timestamp: new Date().toISOString() };
   }
 
   const notified = loadNotified();
@@ -179,12 +193,12 @@ async function runCheck(config, watchlist, isManual = false) {
   const outcomes = [];
   for (let i = 0; i < watchlist.length; i++) {
     const item = watchlist[i];
-    if (i > 0) await delay(REQUEST_DELAY_MS);
+    if (i > 0) await delay(settings.requestDelayMs);
 
     let info = null;
     let error = null;
     try {
-      info = await withRetry(() => checkProduct(item.site, item.code));
+      info = await stores.withRetry(() => stores.checkProduct(item.site, item.code));
     } catch (err) {
       error = err;
       console.error(`Check ${item.site}:${item.code} mislukt:`, err.message);
@@ -312,7 +326,7 @@ async function runCheck(config, watchlist, isManual = false) {
   }
 
   if (newDealCount > 0 && targets.length === 0) {
-    console.log('Nieuwe aanbiedingen gevonden, maar geen Telegram-ontvangers geconfigureerd.');
+    logger('Nieuwe aanbiedingen gevonden, maar geen Telegram-ontvangers geconfigureerd.');
   }
 
   return {
@@ -330,9 +344,13 @@ module.exports = {
   runCheck,
   validTargets,
   promoLabelOf,
+  promoKeyOf,
   sendTelegram,
   broadcast,
   sendList,
   escapeHTML,
-  escapeAttr
+  escapeAttr,
+  settings,
+  setLogger,
+  getTelegramState
 };

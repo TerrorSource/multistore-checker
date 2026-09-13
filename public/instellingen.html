@@ -19,6 +19,7 @@
   </div>
 
   <div class="container">
+    <div class="warning-banner" id="telegramWarning" hidden></div>
     <!-- Telegram instellingen -->
     <div class="card">
       <h2>Telegram instellingen</h2>
@@ -119,7 +120,7 @@
       </div>
     </div>
 
-    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span></footer>
+    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span><span id="updateNotice"></span></footer>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -349,7 +350,7 @@
     loadConfig();
     loadLogs();
     loadVersion();
-    setInterval(loadLogs, 15000);
+    setInterval(() => { loadLogs(); loadVersion(); }, 15000);
   </script>
 </body>
 </html>

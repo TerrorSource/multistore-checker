@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.4.0] — 2026-09-13
+
+### Opgelost
+- **Atomaire opslag + backup bij kapotte bestanden** (`storage.js`): alle
+  databestanden (config, watchlist, notified, seen, state) worden nu via een
+  tmp-bestand + rename geschreven, zodat een crash tijdens het schrijven nooit
+  een half bestand achterlaat. Een onleesbaar bestand wordt als `.corrupt`
+  bewaard; een kapotte watchlist werd voorheen stilzwijgend overschreven met
+  een lege lijst.
+- **Telegram-fouten zichtbaar**: een geweigerd of mislukt bericht komt in het
+  dashboard-log én als waarschuwingsbalk bovenaan elke pagina (verdwijnt
+  zodra een bericht weer lukt). Ook een mislukte Telegram-test wordt gelogd.
+
+### Toegevoegd
+- **Testsuite** (`npm test`, Node's ingebouwde test runner, geen extra
+  dependencies): scrapers per winkel op nagebootste sitedata (Kruidvat-badge,
+  ICI-reward en €0-regel, Trekpleister-tegels + PromotionBox), storings- en
+  meldingslogica van de watcher, gratis-checker, atomaire opslag, config-
+  migratie en de HTTP-API. De CI draait de tests vóór de image-build.
+- **"Meer laden" in de zoeker** voor Trekpleister (`q=…&page=N`) en
+  ICI PARIS XL (`currentPage=N`). Kruidvat pagineert server-side niet: de
+  edge-cache negeert `currentPage`, `pageSize` én cache-busters (uitgebreid
+  getest); daar toont de zoeker "20 van N" met het advies de zoekterm te
+  verfijnen.
+- **"Nieuwe versie beschikbaar"** in de footer: eens per dag worden de
+  versie-tags op GitHub opgehaald (repo instelbaar via `UPDATE_REPO`, uit te
+  zetten met `UPDATE_CHECK=false`).
+
+### Intern
+- Al het netwerkverkeer loopt via `stores.net.fetch`, en de watcher/gratis-
+  checker roepen `stores.*` via het module-object aan, zodat tests de
+  netwerkkant kunnen vervangen. `server.js` exporteert de Express-app (start
+  alleen bij direct uitvoeren).
+
 ## [2.3.0] — 2026-09-13
 
 ### Opgelost

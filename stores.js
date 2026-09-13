@@ -9,10 +9,16 @@
 // (/search/<term>). De querystring-variant (?query=... of ?text=...) wordt
 // door de edge-cache genegeerd en levert stale resultaten.
 //
+// Paginering: ICI honoreert ?currentPage=N op de padvorm. Kruidvat NIET —
+// de edge-cache negeert currentPage (en pageSize, en cache-busters) volledig
+// en serveert altijd dezelfde pagina; getest 2026-09 met alle denkbare
+// varianten. Kruidvat levert dus alleen de eerste pagina (20 resultaten).
+//
 // Trekpleister draait (nog) op het oude platform: productdata staat in
 // data-attributen van <e2-impression-tracker> in de HTML-tegels. De
 // actietekst staat niet op de tegel (alleen een promo-afbeelding) en wordt
-// per unieke actie opgehaald via het PromotionBox-AJAX-endpoint.
+// per unieke actie opgehaald via het PromotionBox-AJAX-endpoint. Paginering
+// werkt daar via ?q=<term>:relevance&page=N (de text=-vorm negeert page).
 
 const cheerio = require('cheerio');
 
@@ -22,7 +28,8 @@ const siteConfigs = {
     displayName: 'Kruidvat NL',
     domain: 'https://www.kruidvat.nl',
     platform: 'spartacus',
-    searchBase: 'https://www.kruidvat.nl/search/'
+    searchBase: 'https://www.kruidvat.nl/search/',
+    paginates: false
   },
   be: {
     key: 'be',
@@ -30,13 +37,15 @@ const siteConfigs = {
     domain: 'https://www.kruidvat.be',
     platform: 'spartacus',
     // BE heeft een /nl/ locale-prefix (anders volgt een 301-redirect).
-    searchBase: 'https://www.kruidvat.be/nl/search/'
+    searchBase: 'https://www.kruidvat.be/nl/search/',
+    paginates: false
   },
   tp: {
     key: 'tp',
     displayName: 'Trekpleister',
     domain: 'https://www.trekpleister.nl',
-    platform: 'legacy'
+    platform: 'legacy',
+    paginates: true
   },
   // ICI PARIS XL (ook A.S. Watson) draait op hetzelfde Spartacus-platform als
   // Kruidvat. Let op de afwijkingen: productcodes hebben een BP_-prefix, er is
@@ -49,7 +58,8 @@ const siteConfigs = {
     displayName: 'ICI PARIS XL',
     domain: 'https://www.iciparisxl.nl',
     platform: 'spartacus',
-    searchBase: 'https://www.iciparisxl.nl/search/'
+    searchBase: 'https://www.iciparisxl.nl/search/',
+    paginates: true
   }
 };
 
@@ -73,8 +83,14 @@ const BROWSER_HEADERS = {
 // hangende verbinding zou anders het scrape-slot — en daarmee béide checkers —
 // voor onbepaalde tijd blokkeren (checkRunning blijft dan op true staan).
 const FETCH_TIMEOUT_MS = 20000;
+
+// Alle netwerkverkeer van de app loopt via net.fetch, zodat tests het kunnen
+// vervangen (stores.net.fetch = nep) zonder de modules te herschrijven.
+const net = {
+  fetch: (url, options = {}) => fetch(url, { ...options, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+};
 function fetchWithTimeout(url, options = {}) {
-  return fetch(url, { ...options, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  return net.fetch(url, options);
 }
 
 // Eén herkansing bij een tijdelijke fout (HTTP-fout, netwerkhik, timeout),
@@ -113,7 +129,7 @@ function classifyPromo(headline) {
   return 'overig';
 }
 
-// --- Spartacus-helpers (Kruidvat NL/BE) --------------------------------------
+// --- Spartacus-helpers (Kruidvat NL/BE, ICI) -----------------------------------
 
 // Spartacus serialiseert de app-state met eigen escaping i.p.v. HTML-entities:
 // &q; -> "  &l; -> <  &g; -> >  &s; -> '  &a; -> &
@@ -248,9 +264,14 @@ function mapSpartacusProduct(p, site) {
   };
 }
 
-async function fetchSearchSpartacus(site, term) {
-  const url = site.searchBase + encodeURIComponent(String(term).trim());
-  const res = await fetchWithTimeout(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
+async function fetchSearchSpartacus(site, term, page = 0) {
+  // Pagina 0 altijd via het pad (verse resultaten). Volgende pagina's alleen
+  // waar de site dat ondersteunt (ICI); bij Kruidvat zou dat dezelfde eerste
+  // pagina opleveren.
+  let url = site.searchBase + encodeURIComponent(String(term).trim());
+  if (page > 0 && site.paginates) url += `?currentPage=${page}`;
+
+  const res = await net.fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
 
   const html = await res.text();
@@ -258,11 +279,18 @@ async function fetchSearchSpartacus(site, term) {
   if (!state) throw new Error(`${site.displayName}: spartacus-app-state niet gevonden (sitestructuur gewijzigd?)`);
 
   const model = findSearchModel(state);
-  if (!model) return { products: [], total: 0 };
+  if (!model) return { products: [], total: 0, page: 0, pageSize: 0, hasMore: false };
 
+  const pag = model.pagination || {};
+  const total = pag.totalResults || model.products.length;
+  const current = Number.isInteger(pag.currentPage) ? pag.currentPage : page;
+  const totalPages = pag.totalPages || 1;
   return {
     products: model.products.map(p => mapSpartacusProduct(p, site)),
-    total: (model.pagination && model.pagination.totalResults) || model.products.length
+    total,
+    page: current,
+    pageSize: pag.pageSize || model.products.length,
+    hasMore: site.paginates && current + 1 < totalPages
   };
 }
 
@@ -279,7 +307,7 @@ function formatEuro(v) {
 // niets gevonden wordt.
 async function fetchLegacyPromoText(site, code) {
   const url = `${site.domain}/view/PromotionBoxComponentController?componentUid=PromotionBoxComponent&currentProductCode=${encodeURIComponent(code)}`;
-  const res = await fetchWithTimeout(url, {
+  const res = await net.fetch(url, {
     headers: {
       ...BROWSER_HEADERS,
       'Sec-Fetch-Dest': 'empty',
@@ -352,9 +380,14 @@ function mapLegacyTile($, el, site) {
   };
 }
 
-async function fetchSearchLegacy(site, term) {
-  const url = `${site.domain}/search?text=${encodeURIComponent(String(term).trim())}`;
-  const res = await fetchWithTimeout(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
+async function fetchSearchLegacy(site, term, page = 0) {
+  const t = String(term).trim();
+  // Pagina 0 via de text=-vorm (bewezen vers); volgende pagina's via de
+  // q=<term>:relevance&page=N-vorm — de text=-vorm negeert de page-parameter.
+  const url = page > 0
+    ? `${site.domain}/search?q=${encodeURIComponent(t + ':relevance')}&page=${page}`
+    : `${site.domain}/search?text=${encodeURIComponent(t)}`;
+  const res = await net.fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
 
   const html = await res.text();
@@ -401,24 +434,33 @@ async function fetchSearchLegacy(site, term) {
   }
 
   const totalAttr = $('.product__list-col e2-impression-tracker').first().attr('data-search-result-total');
-  const total = parseInt(totalAttr, 10);
+  const totalParsed = parseInt(totalAttr, 10);
+  const total = isNaN(totalParsed) ? products.length : totalParsed;
+  const pageSize = products.length;
 
-  return { products, total: isNaN(total) ? products.length : total };
+  return {
+    products,
+    total,
+    page,
+    pageSize,
+    hasMore: pageSize > 0 && (page + 1) * pageSize < total
+  };
 }
 
 // --- Publieke API --------------------------------------------------------------
 
-async function fetchSearch(siteKey, term) {
+async function fetchSearch(siteKey, term, page = 0) {
   const site = siteConfigs[siteKey];
   if (!site) throw new Error(`Onbekende site: ${siteKey}`);
   return site.platform === 'legacy'
-    ? fetchSearchLegacy(site, term)
-    : fetchSearchSpartacus(site, term);
+    ? fetchSearchLegacy(site, term, page)
+    : fetchSearchSpartacus(site, term, page);
 }
 
-// Vrije zoekopdracht voor het dashboard.
-async function searchProducts(siteKey, term) {
-  return fetchSearch(siteKey, term);
+// Vrije zoekopdracht voor het dashboard (met paginering waar de winkel dat
+// ondersteunt; zie de toelichting bovenaan).
+async function searchProducts(siteKey, term, page = 0) {
+  return fetchSearch(siteKey, term, page);
 }
 
 // Status van één gevolgd product: zoeken op productcode geeft precies dat
@@ -434,11 +476,14 @@ module.exports = {
   checkProduct,
   PROMO_CATEGORIES,
   classifyPromo,
-  // Herbruikbaar voor andere scrapers (o.a. gratis-producten-checker):
+  // Herbruikbaar voor andere scrapers (o.a. gratis-producten-checker) en tests:
   BROWSER_HEADERS,
   FETCH_TIMEOUT_MS,
+  net,
   fetchWithTimeout,
   withRetry,
   extractSpartacusState,
-  findSearchModel
+  findSearchModel,
+  mapSpartacusProduct,
+  stockStatusOf
 };

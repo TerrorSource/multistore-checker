@@ -87,6 +87,12 @@ Voor alle verzoeken is de volledige browser-headerset vereist (inclusief
   een NAS-herstart geen volledig interval overslaat.
 - De laatste check-resultaten en logregels staan in `/data/state.json` en
   overleven een herstart.
+- Alle databestanden worden atomair geschreven (tmp + rename); een onleesbaar
+  bestand wordt als `.corrupt` bewaard in plaats van overschreven.
+- Telegram-fouten verschijnen in het log en als waarschuwing bovenaan het
+  dashboard.
+- Zoekresultaten: Trekpleister en ICI PARIS XL laden verder met "Meer laden";
+  Kruidvat levert alleen de eerste pagina (de edge-cache negeert paginering).
 - De container start als root om de rechten op het datavolume recht te
   zetten en draait daarna als de onbevoorrechte gebruiker `node`
   (zie `entrypoint.sh`). Lukt dat niet, dan valt hij terug op root met een
@@ -120,6 +126,19 @@ docker run -d --name multistore-checker \
 | `TELEGRAM_BOT_TOKEN` | Eerste Telegram-bot (alleen bij eerste start) | – |
 | `TELEGRAM_CHAT_ID` | Bijbehorende chat-ID | – |
 | `CHECK_INTERVAL` | Standaard interval in minuten | `360` |
+| `UPDATE_CHECK` | `false` schakelt de dagelijkse versie-check op GitHub uit | `true` |
+| `UPDATE_REPO` | Repo waarvan de versie-tags gelezen worden | `TerrorSource/multistore-checker` |
+
+## Ontwikkelen en testen
+
+```bash
+npm ci
+npm test        # unit- en API-tests (Node's ingebouwde test runner)
+npm start       # lokaal draaien; CONFIG_DIR=./data PORT=8000 zijn handig
+```
+
+De tests raken nooit het internet: alle sitedata en Telegram-verkeer worden
+nagebootst (`test/helpers.js`). De CI draait `npm test` vóór de image-build.
 
 Telegram kan ook volledig via het dashboard geconfigureerd worden.
 
