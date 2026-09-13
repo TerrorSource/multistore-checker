@@ -71,20 +71,41 @@ tegel en wordt per unieke actie opgehaald via het
 Voor alle verzoeken is de volledige browser-headerset vereist (inclusief
 `sec-ch-ua` en `Sec-Fetch-*`), anders blokkeert Akamai met een 403.
 
+### Robuustheid
+
+- Elke externe request heeft een timeout van 20 s en krijgt bij een
+  tijdelijke fout één herkansing (10 s later). Een check-run duurt nooit
+  langer dan 45 minuten.
+- Alles wat naar de winkels gaat (geplande checks, zoeken, een nieuw product
+  volgen) loopt door één gedeeld scrape-slot, dus nooit parallel.
+- Is een winkel als geheel onbereikbaar, dan komt er één storingsmelding per
+  winkel (en pas weer een nieuwe nadat de winkel bereikbaar is geweest);
+  de gevolgde producten van die winkel behouden hun laatste bekende status.
+  Een product dat 3 checks op rij écht niet gevonden wordt, wordt éénmalig
+  gemeld als "mogelijk verdwenen".
+- Bij een (her)start draait de eerste geplande check al na ~1 minuut, zodat
+  een NAS-herstart geen volledig interval overslaat.
+- De laatste check-resultaten en logregels staan in `/data/state.json` en
+  overleven een herstart.
+- De container start als root om de rechten op het datavolume recht te
+  zetten en draait daarna als de onbevoorrechte gebruiker `node`
+  (zie `entrypoint.sh`). Lukt dat niet, dan valt hij terug op root met een
+  waarschuwing in het log.
+
 ## Starten
 
 ```bash
 docker compose up -d --build
 ```
 
-Dashboard: http://localhost:9070
+Dashboard: http://localhost:9060
 
 ### Zelf bouwen/draaien zonder compose
 
 ```bash
 docker build -t multistore-checker .
 docker run -d --name multistore-checker \
-  -p 9070:8000 \
+  -p 9060:8000 \
   -v $(pwd)/data:/data \
   -e TZ=Europe/Amsterdam \
   multistore-checker

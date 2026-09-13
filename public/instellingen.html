@@ -299,9 +299,11 @@
         const result = await res.json();
         if (result.success) {
           const summary = (result.results || [])
-            .map(r => `${r.site}: ${r.afterFilter}`)
+            .map(r => `${r.site}: ${r.error ? 'fout' : r.afterFilter}`)
             .join(', ') || 'geen sites ingeschakeld';
           showToast(`Gratis-check voltooid — ${summary}`, 'success');
+        } else if (result.busy) {
+          showToast('Er loopt al een gratis-check; zie de logs voor het resultaat.', 'info');
         } else {
           showToast('Gratis-check mislukt: ' + (result.error || 'onbekende fout'), 'error');
         }

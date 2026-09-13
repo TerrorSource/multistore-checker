@@ -5,7 +5,7 @@
 const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
-const { BROWSER_HEADERS, extractSpartacusState, findSearchModel } = require('./stores');
+const { BROWSER_HEADERS, fetchWithTimeout, withRetry, extractSpartacusState, findSearchModel } = require('./stores');
 const { validTargets, broadcast, sendList, escapeHTML, escapeAttr } = require('./watcher');
 
 const { DATA_DIR } = require('./datadir');
@@ -19,6 +19,10 @@ const DEFAULT_ONLY_NEW_DAYS = 7;
 
 // Zoekfilter: producten met een verkoopprijs tussen 0 en 0.48 EUR
 // (de "Geen prijs aanwezig" / gratis producten staan hier tussen).
+// Het filter staat hier in de querystring; anders dan bij een vrije zoekterm
+// (zie stores.js) levert dat GEEN stale resultaten op: geverifieerd
+// (2026-09) tegen een echte browser — querystring- en padvorm geven dezelfde,
+// verse productlijst.
 const QUERY = ':price-asc:salePriceRange:0%20TO%200.48';
 
 const gratisSites = {
@@ -160,23 +164,21 @@ function scrapeLegacy(html, site) {
 
 // --- Check ------------------------------------------------------------------
 
+// Geeft null terug als de site onbereikbaar is (na één herkansing), zodat de
+// caller een storing kan onderscheiden van "0 gratis producten gevonden".
 async function scrapeSite(site) {
   try {
-    const res = await fetch(site.checkUrl, {
-      headers: BROWSER_HEADERS,
-      redirect: 'follow'
+    const html = await withRetry(async () => {
+      const res = await fetchWithTimeout(site.checkUrl, { headers: BROWSER_HEADERS, redirect: 'follow' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
     });
-    if (!res.ok) {
-      console.error(`${site.displayName}: HTTP ${res.status}`);
-      return [];
-    }
-    const html = await res.text();
     return site.platform === 'spartacus'
       ? scrapeSpartacus(html, site)
       : scrapeLegacy(html, site);
   } catch (err) {
-    console.error(`Fout bij scrapen van ${site.displayName}:`, err.message);
-    return [];
+    console.error(`${site.displayName}: ophalen mislukt: ${err.message}`);
+    return null;
   }
 }
 
@@ -217,6 +219,12 @@ async function runGratisCheck(config, isManual = false) {
     if (i > 0) await delay(2000);
 
     const products = await scrapeSite(site);
+    if (products === null) {
+      // Storing: geen "0 gevonden"-bericht sturen, wel zichtbaar in het log
+      // en de samenvatting.
+      results.push({ site: site.displayName, siteKey: site.key, error: true, totalFound: 0, afterFilter: 0, newCount: 0 });
+      continue;
+    }
 
     // inStock: true = op voorraad, false = uitverkocht, null = onbekend.
     // Bij 'alleen op voorraad' houden we true én onbekend aan.

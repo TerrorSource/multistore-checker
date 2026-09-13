@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { siteConfigs, checkProduct } = require('./stores');
+const { siteConfigs, checkProduct, fetchWithTimeout, withRetry } = require('./stores');
 
 const { DATA_DIR } = require('./datadir');
 
@@ -9,10 +9,14 @@ const { DATA_DIR } = require('./datadir');
 // dan wordt de sleutel gewist en meldt een volgende (of herhaalde) actie weer.
 const NOTIFIED_FILE = path.join(DATA_DIR, 'notified.json');
 
+// Sleutel-prefix in notified.json voor storingsmeldingen per winkel; staat
+// naast de product-sleutels "<site>:<code>".
+const OUTAGE_PREFIX = '_outage:';
+
 // Telegram weigert berichten boven 4096 tekens; we splitsen ruim daaronder.
 const CHUNK_LIMIT = 3500;
 
-// Pauze tussen requests naar Kruidvat, om niet als bot geblokkeerd te raken.
+// Pauze tussen requests naar de winkels, om niet als bot geblokkeerd te raken.
 const REQUEST_DELAY_MS = 2000;
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -26,9 +30,14 @@ function escapeAttr(text) {
   return String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+function siteName(siteKey) {
+  return siteConfigs[siteKey] ? siteConfigs[siteKey].displayName : siteKey;
+}
+
 // --- Gemelde acties -------------------------------------------------------
 
-// Structuur: { "<site>:<code>": { promoKey, headline, notifiedAt } }
+// Structuur: { "<site>:<code>": { promoKey, headline, notifiedAt },
+//              "_outage:<site>": { since, error } }
 function loadNotified() {
   try {
     if (fs.existsSync(NOTIFIED_FILE)) {
@@ -86,7 +95,7 @@ async function sendTelegram(botId, chatId, text, parseMode = null) {
   const body = { chat_id: chatId, text, disable_web_page_preview: true };
   if (parseMode) body.parse_mode = parseMode;
   try {
-    const res = await fetch(`https://api.telegram.org/bot${botId}/sendMessage`, {
+    const res = await fetchWithTimeout(`https://api.telegram.org/bot${botId}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -157,37 +166,91 @@ async function runCheck(config, watchlist, isManual = false) {
 
   const notified = loadNotified();
   const watchedKeys = new Set(watchlist.map(i => `${i.site}:${i.code}`));
-  // Producten die niet meer gevolgd worden ook niet meer onthouden.
+  // Producten die niet meer gevolgd worden ook niet meer onthouden
+  // (storingssleutels blijven staan).
   for (const key of Object.keys(notified)) {
-    if (!watchedKeys.has(key)) delete notified[key];
+    if (!key.startsWith(OUTAGE_PREFIX) && !watchedKeys.has(key)) delete notified[key];
   }
 
-  // Nieuwe aanbiedingen per site verzamelen voor het Telegram-bericht.
-  const newDealsBySite = {};
-  let dealCount = 0;
-  let errorCount = 0;
-
+  // Fase 1: alle producten ophalen, met pauze ertussen en één herkansing bij
+  // een tijdelijke fout. Een fout (HTTP/netwerk/timeout) is iets anders dan
+  // een product dat netjes "niet gevonden" (null) oplevert; dat onderscheid
+  // is nodig voor de storingsdetectie hieronder.
+  const outcomes = [];
   for (let i = 0; i < watchlist.length; i++) {
     const item = watchlist[i];
     if (i > 0) await delay(REQUEST_DELAY_MS);
 
     let info = null;
+    let error = null;
     try {
-      info = await checkProduct(item.site, item.code);
+      info = await withRetry(() => checkProduct(item.site, item.code));
     } catch (err) {
+      error = err;
       console.error(`Check ${item.site}:${item.code} mislukt:`, err.message);
     }
+    outcomes.push({ item, info, error });
+  }
+
+  // Fase 2: storingsdetectie per winkel. Gooiden ÁLLE checks van een winkel
+  // een fout, dan is de winkel onbereikbaar: dan geen fouttelling per product
+  // (en dus geen reeks "verdwenen"-meldingen), maar één storingsmelding per
+  // winkel — en pas weer een volgende als de winkel tussendoor bereikbaar was.
+  const perSite = {};
+  for (const o of outcomes) {
+    const s = perSite[o.item.site] = perSite[o.item.site] || { total: 0, errors: 0, lastError: null };
+    s.total++;
+    if (o.error) { s.errors++; s.lastError = o.error.message; }
+  }
+  const outageSites = new Set(
+    Object.keys(perSite).filter(k => perSite[k].errors > 0 && perSite[k].errors === perSite[k].total)
+  );
+  for (const siteKey of Object.keys(perSite)) {
+    const okey = OUTAGE_PREFIX + siteKey;
+    if (outageSites.has(siteKey)) {
+      if (!notified[okey]) {
+        notified[okey] = { since: new Date().toISOString(), error: perSite[siteKey].lastError };
+        if (targets.length > 0) {
+          await broadcast(targets,
+            `⚠️ ${siteName(siteKey)} is onbereikbaar (${perSite[siteKey].lastError}); `
+            + `${perSite[siteKey].total} gevolgd(e) product(en) konden niet gecheckt worden. `
+            + `Je krijgt hierover geen nieuwe melding tot de site weer bereikbaar is geweest.`);
+        }
+      }
+    } else if (notified[okey]) {
+      // Winkel weer bereikbaar: stil herstellen.
+      delete notified[okey];
+    }
+  }
+
+  // Fase 3: resultaten verwerken en nieuwe aanbiedingen verzamelen.
+  const newDealsBySite = {};
+  let dealCount = 0;
+  let errorCount = 0;
+
+  for (const { item, info, error } of outcomes) {
+    const checkedAt = new Date().toISOString();
 
     if (!info) {
       errorCount++;
       // Laatste bekende prijs/actie bewaren; alleen de foutmelding en het
       // tijdstip bijwerken, zodat het dashboard niet "leegvalt".
+      if (outageSites.has(item.site)) {
+        item.lastStatus = {
+          ...(item.lastStatus || {}),
+          error: `${siteName(item.site)} onbereikbaar`,
+          checkedAt
+        };
+        continue;
+      }
       item.failCount = (item.failCount || 0) + 1;
+      const reason = error
+        ? `Ophalen mislukt: ${error.message}`
+        : 'Product niet gevonden op de site';
       item.lastStatus = {
         ...(item.lastStatus || {}),
-        error: 'Product niet gevonden of site onbereikbaar'
-          + (item.failCount > 1 ? ` (${item.failCount}e keer op rij)` : ''),
-        checkedAt: new Date().toISOString()
+        error: reason + (item.failCount > 1 ? ` (${item.failCount}e keer op rij)` : ''),
+        checkedAt
       };
       // Na 3 opeenvolgende mislukkingen éénmalig via Telegram melden dat het
       // product waarschijnlijk van de site verdwenen is. We blijven het wel
@@ -221,14 +284,14 @@ async function runCheck(config, watchlist, isManual = false) {
       promo: info.promo,
       promoLabel,
       promoEnd: info.promo ? formatEndDate(info.promo.endDate) : null,
-      checkedAt: new Date().toISOString()
+      checkedAt
     };
 
     const key = `${item.site}:${item.code}`;
     if (promoKey) {
       // Alleen melden als deze actie nog niet gemeld is (nieuw of gewijzigd).
       if (!notified[key] || notified[key].promoKey !== promoKey) {
-        notified[key] = { promoKey, headline: promoLabel, notifiedAt: new Date().toISOString() };
+        notified[key] = { promoKey, headline: promoLabel, notifiedAt: checkedAt };
         (newDealsBySite[item.site] = newDealsBySite[item.site] || []).push({ item, info });
       }
     } else {
@@ -244,8 +307,7 @@ async function runCheck(config, watchlist, isManual = false) {
   for (const [siteKey, deals] of Object.entries(newDealsBySite)) {
     newDealCount += deals.length;
     if (targets.length === 0) continue;
-    const site = siteConfigs[siteKey];
-    const header = `🛒 <b>${escapeHTML(site ? site.displayName : siteKey)}</b> — ${deals.length} nieuwe aanbieding${deals.length === 1 ? '' : 'en'}:\n`;
+    const header = `🛒 <b>${escapeHTML(siteName(siteKey))}</b> — ${deals.length} nieuwe aanbieding${deals.length === 1 ? '' : 'en'}:\n`;
     await sendList(targets, header, deals.map(d => dealLine(d.item, d.info)));
   }
 
@@ -259,6 +321,7 @@ async function runCheck(config, watchlist, isManual = false) {
     deals: dealCount,
     newDeals: newDealCount,
     errors: errorCount,
+    outages: [...outageSites],
     timestamp: new Date().toISOString()
   };
 }

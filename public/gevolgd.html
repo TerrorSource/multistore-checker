@@ -121,6 +121,8 @@
         const result = await res.json();
         if (result.success) {
           showToast(`Check voltooid: ${result.deals} van ${result.checked} producten in de aanbieding (${result.newDeals} nieuw gemeld)`, 'success');
+        } else if (result.busy) {
+          showToast('Er loopt al een check; de lijst wordt vanzelf ververst als die klaar is.', 'info');
         } else {
           showToast('Check mislukt: ' + (result.error || 'onbekende fout'), 'error');
         }
@@ -133,12 +135,14 @@
       loadWatchlist();
     });
 
-    // Na een geplande check op de achtergrond ook de lijst verversen.
+    // Na een geplande check op de achtergrond ook de lijst verversen; zet
+    // meteen het versienummer (scheelt een aparte status-call).
     let lastCheckStamp = null;
     async function pollStatus() {
       try {
         const res = await fetch('/api/status');
         const s = await res.json();
+        if (s.version) document.getElementById('appVersion').textContent = 'v' + s.version;
         if (s.lastCheck && s.lastCheck !== lastCheckStamp) {
           if (lastCheckStamp !== null) loadWatchlist();
           lastCheckStamp = s.lastCheck;
@@ -147,7 +151,7 @@
     }
 
     loadWatchlist();
-    loadVersion();
+    pollStatus();
     setInterval(pollStatus, 15000);
   </script>
 </body>

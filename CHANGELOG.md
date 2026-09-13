@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.3.0] — 2026-09-13
+
+### Opgelost
+- **Timeouts op alle externe requests** (20 s): Node's `fetch` heeft er geen,
+  en één hangende verbinding kon het gedeelde scrape-slot — en daarmee beide
+  checkers — permanent blokkeren. Daarnaast een harde bovengrens van 45 min
+  per check-run als vangnet.
+- **Zoeken en "+ Volgen" lopen nu ook door het scrape-slot**, zodat ze niet
+  meer parallel aan een geplande check naar de winkels gaan.
+- **Storingsdetectie per winkel**: zijn álle checks van een winkel mislukt
+  (HTTP/netwerk/timeout), dan telt dat niet mee voor de "3x niet gevonden"-
+  logica per product; er komt één storingsmelding per winkel i.p.v. een
+  "verdwenen"-bericht per product. Een product dat écht niet gevonden wordt
+  (site bereikbaar, product niet in de resultaten) wordt nog steeds na 3 keer
+  gemeld. De gratis-checker stuurt bij een storing geen "0 gevonden"-bericht
+  meer.
+- **Eén herkansing bij tijdelijke fouten** (10 s later) voor product-checks
+  en de gratis-checker.
+- **Eerste geplande check ~1 min na de (her)start** (gratis-check na 1,5 min)
+  i.p.v. pas na een volledig interval.
+- **Laatste resultaten en logs overleven een herstart** (`state.json` in de
+  datamap).
+- Trekpleister/Kruidvat-gratis-URL geverifieerd tegen een echte browser:
+  querystring- en padvorm geven identieke, verse resultaten; de bestaande
+  URL blijft.
+- "Check al bezig" verschijnt in het dashboard als informatieve melding i.p.v.
+  als fout; browser-headers bijgewerkt naar Chrome 140; de gevolgde-
+  productenpagina doet één status-call minder; README-poort gecorrigeerd
+  (9060).
+
+### Gewijzigd
+- **Node 22** als runtime (Node 20 is end-of-life sinds april 2026);
+  `engines` in package.json aangepast.
+- **Container draait als gebruiker `node`** i.p.v. root: `entrypoint.sh` zet
+  eerst de rechten op het datavolume recht en valt bij een niet-schrijfbaar
+  volume terug op root met een waarschuwing (op Docker Desktop/macOS met een
+  bind-mount is dat het geval; op Linux/NAS draait hij als `node`). De
+  Dockerfile maakt `/app` expliciet leesbaar (`chmod -R a+rX`), omdat de
+  bronbestanden mode 700 kunnen hebben.
+- **CI**: een test-job (syntax-check + smoke-test van de draaiende server)
+  moet slagen vóór er een image naar GHCR gaat; Dependabot voor npm en
+  GitHub Actions.
+
 ## [2.2.0] — 2026-07-20
 
 ### Toegevoegd

@@ -56,10 +56,10 @@ const siteConfigs = {
 // De VOLLEDIGE headerset is verplicht: met alleen een User-Agent geeft
 // Akamai een 403. Inclusief sec-ch-ua en Sec-Fetch-* werkt het wel.
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'sec-ch-ua': '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
+  'sec-ch-ua': '"Chromium";v="140", "Google Chrome";v="140", "Not.A/Brand";v="99"',
   'sec-ch-ua-mobile': '?0',
   'sec-ch-ua-platform': '"macOS"',
   'Upgrade-Insecure-Requests': '1',
@@ -68,6 +68,30 @@ const BROWSER_HEADERS = {
   'Sec-Fetch-Site': 'none',
   'Sec-Fetch-User': '?1'
 };
+
+// Elke externe request krijgt een timeout: Node's fetch heeft er geen, en één
+// hangende verbinding zou anders het scrape-slot — en daarmee béide checkers —
+// voor onbepaalde tijd blokkeren (checkRunning blijft dan op true staan).
+const FETCH_TIMEOUT_MS = 20000;
+function fetchWithTimeout(url, options = {}) {
+  return fetch(url, { ...options, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+}
+
+// Eén herkansing bij een tijdelijke fout (HTTP-fout, netwerkhik, timeout),
+// zodat een enkele hik niet meteen als mislukking telt.
+const RETRY_DELAY_MS = 10000;
+async function withRetry(fn, { retries = 1, delayMs = RETRY_DELAY_MS } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
 
 // Actie-categorieën voor filtering en weergave. 'verzending' (gratis
 // verzending) telt bewust NIET als echte actie: heeft een product alleen
@@ -226,7 +250,7 @@ function mapSpartacusProduct(p, site) {
 
 async function fetchSearchSpartacus(site, term) {
   const url = site.searchBase + encodeURIComponent(String(term).trim());
-  const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
+  const res = await fetchWithTimeout(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
 
   const html = await res.text();
@@ -255,7 +279,7 @@ function formatEuro(v) {
 // niets gevonden wordt.
 async function fetchLegacyPromoText(site, code) {
   const url = `${site.domain}/view/PromotionBoxComponentController?componentUid=PromotionBoxComponent&currentProductCode=${encodeURIComponent(code)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     headers: {
       ...BROWSER_HEADERS,
       'Sec-Fetch-Dest': 'empty',
@@ -330,7 +354,7 @@ function mapLegacyTile($, el, site) {
 
 async function fetchSearchLegacy(site, term) {
   const url = `${site.domain}/search?text=${encodeURIComponent(String(term).trim())}`;
-  const res = await fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
+  const res = await fetchWithTimeout(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
 
   const html = await res.text();
@@ -412,6 +436,9 @@ module.exports = {
   classifyPromo,
   // Herbruikbaar voor andere scrapers (o.a. gratis-producten-checker):
   BROWSER_HEADERS,
+  FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+  withRetry,
   extractSpartacusState,
   findSearchModel
 };

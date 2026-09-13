@@ -15,7 +15,19 @@ const PORT = process.env.PORT || 8000;
 // op het volume van een multistorechecker v1.x draait (zie datadir.js).
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WATCHLIST_FILE = path.join(DATA_DIR, 'watchlist.json');
+// Laatste check-resultaten en logregels, zodat het dashboard na een herstart
+// niet leeg is.
+const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const KNOWN_SITES = Object.keys(siteConfigs);
+
+// Eerste geplande run kort na de (her)start, zodat een NAS-herstart geen
+// volledig interval (bv. 6 uur) aan checks overslaat. Gratis-check iets
+// later; het scrape-slot zet ze toch achter elkaar.
+const INITIAL_CHECK_DELAY_MS = 60 * 1000;
+const INITIAL_GRATIS_DELAY_MS = 90 * 1000;
+// Harde bovengrens per check-run: vangnet naast de fetch-timeouts, zodat een
+// run nooit eindeloos de status "bezig" kan houden.
+const RUN_CAP_MS = 45 * 60 * 1000;
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -168,19 +180,56 @@ let scheduleTimer = null;
 let lastCheckResult = null;
 let checkRunning = false;
 
-// Logging
-const logs = [];
+// --- Logging & persistente status ------------------------------------------------
+
+let logs = [];
 const MAX_LOGS = 100;
+
+function loadState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+      if (Array.isArray(s.logs)) logs = s.logs.slice(0, MAX_LOGS);
+      lastCheckResult = s.lastCheckResult || null;
+      lastGratisResult = s.lastGratisResult || null;
+    }
+  } catch (err) {
+    console.error('state.json laden mislukt:', err.message);
+  }
+}
+
+// Schrijven gebeurt uitgesteld (max. 1x per seconde), zodat een reeks
+// logregels niet een reeks schrijfacties oplevert.
+let saveStateTimer = null;
+function saveStateSoon() {
+  if (saveStateTimer) return;
+  saveStateTimer = setTimeout(() => {
+    saveStateTimer = null;
+    try {
+      fs.writeFileSync(STATE_FILE, JSON.stringify({ logs, lastCheckResult, lastGratisResult }, null, 2));
+    } catch (err) {
+      console.error('state.json opslaan mislukt:', err.message);
+    }
+  }, 1000);
+}
+
 function addLog(message) {
   const entry = { time: new Date().toISOString(), message };
   logs.unshift(entry);
   if (logs.length > MAX_LOGS) logs.pop();
   console.log(`[${entry.time}] ${message}`);
+  saveStateSoon();
 }
+
+loadState();
+
+// --- Schedulers ---------------------------------------------------------------------
 
 // Scheduler: setTimeout-keten i.p.v. cron, zodat elk interval in minuten
 // werkt en de volgende run pas gepland wordt na afloop van de vorige.
-function setupScheduler() {
+// firstDelayMs: wachttijd tot de eerste run (bij de start kort, daarna het
+// gewone interval).
+function setupScheduler(firstDelayMs = null) {
   if (scheduleTimer) {
     clearTimeout(scheduleTimer);
     scheduleTimer = null;
@@ -196,13 +245,15 @@ function setupScheduler() {
     await executeCheck(false);
     scheduleTimer = setTimeout(tick, ms);
   };
-  scheduleTimer = setTimeout(tick, ms);
-  addLog(`Scheduler actief: elke ${config.interval} minuten.`);
+  const first = firstDelayMs != null ? Math.min(firstDelayMs, ms) : ms;
+  scheduleTimer = setTimeout(tick, first);
+  addLog(`Scheduler actief: elke ${config.interval} minuten`
+    + (firstDelayMs != null ? `, eerste check over ${Math.round(first / 1000)} s.` : '.'));
 }
 
 // Eigen scheduler voor de gratis-producten-checker, los van de
 // aanbiedingen-checks.
-function setupGratisScheduler() {
+function setupGratisScheduler(firstDelayMs = null) {
   if (gratisScheduleTimer) {
     clearTimeout(gratisScheduleTimer);
     gratisScheduleTimer = null;
@@ -219,14 +270,17 @@ function setupGratisScheduler() {
     await executeGratisCheck(false);
     gratisScheduleTimer = setTimeout(tick, ms);
   };
-  gratisScheduleTimer = setTimeout(tick, ms);
-  addLog(`Gratis-scheduler actief: elke ${g.interval} minuten.`);
+  const first = firstDelayMs != null ? Math.min(firstDelayMs, ms) : ms;
+  gratisScheduleTimer = setTimeout(tick, first);
+  addLog(`Gratis-scheduler actief: elke ${g.interval} minuten`
+    + (firstDelayMs != null ? `, eerste check over ${Math.round(first / 1000)} s.` : '.'));
 }
 
-// Gedeeld scrape-slot: de aanbiedingen-check en de gratis-check scrapen
-// dezelfde winkels en mogen daarom niet tegelijk draaien (parallelle
-// request-reeksen vergroten de kans op een Akamai-blokkade). De tweede check
-// wacht netjes tot de eerste klaar is.
+// Gedeeld scrape-slot: alles wat naar de winkels gaat (geplande checks, maar
+// ook zoeken en het ophalen van een nieuw gevolgd product) loopt hier
+// doorheen, zodat er nooit twee request-reeksen tegelijk lopen (parallelle
+// belasting vergroot de kans op een Akamai-blokkade). De volgende wacht
+// netjes tot de vorige klaar is.
 let scrapeSlot = Promise.resolve();
 function withScrapeSlot(fn) {
   const run = scrapeSlot.then(fn, fn);
@@ -234,25 +288,39 @@ function withScrapeSlot(fn) {
   return run;
 }
 
+// Bovengrens op de looptijd van een run. Dankzij de fetch-timeouts eindigt
+// elke run uiteindelijk vanzelf; dit is het vangnet dat de "bezig"-status en
+// het log in elk geval vrijgeeft.
+function withRunCap(promise, label) {
+  let timer;
+  promise.catch(() => {}); // late afwijzing na de cap niet als unhandled laten vallen
+  const cap = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(
+      `${label} overschreed de maximale looptijd van ${RUN_CAP_MS / 60000} minuten en is afgebroken`)), RUN_CAP_MS);
+  });
+  return Promise.race([promise, cap]).finally(() => clearTimeout(timer));
+}
+
 async function executeGratisCheck(isManual) {
   if (gratisCheckRunning) {
     addLog('Gratis-check al bezig, overgeslagen.');
-    return { success: false, error: 'Gratis-check al bezig' };
+    return { success: false, busy: true, error: 'Gratis-check al bezig' };
   }
   gratisCheckRunning = true;
   const type = isManual ? 'Handmatige' : 'Geplande';
 
   try {
-    const result = await withScrapeSlot(() => runGratisCheck(config, isManual));
+    const result = await withRunCap(withScrapeSlot(() => runGratisCheck(config, isManual)), 'Gratis-check');
     lastGratisResult = result;
     if (result.success) {
       const summary = result.results
-        .map(r => `${r.site}: ${r.afterFilter}`)
+        .map(r => `${r.site}: ${r.error ? 'fout' : r.afterFilter}`)
         .join(', ') || 'geen sites ingeschakeld';
       addLog(`${type} gratis-check voltooid: ${summary}.`);
     } else {
       addLog(`${type} gratis-check mislukt: ${result.error}`);
     }
+    saveStateSoon();
     return result;
   } catch (err) {
     addLog(`${type} gratis-check fout: ${err.message}`);
@@ -265,13 +333,13 @@ async function executeGratisCheck(isManual) {
 async function executeCheck(isManual) {
   if (checkRunning) {
     addLog('Check al bezig, overgeslagen.');
-    return { success: false, error: 'Check al bezig' };
+    return { success: false, busy: true, error: 'Check al bezig' };
   }
   checkRunning = true;
   const type = isManual ? 'Handmatige' : 'Geplande';
 
   try {
-    const result = await withScrapeSlot(() => runCheck(config, watchlist, isManual));
+    const result = await withRunCap(withScrapeSlot(() => runCheck(config, watchlist, isManual)), 'Check');
     // runCheck werkt lastStatus per watchlist-item bij; bewaren zodat het
     // dashboard na een herstart de laatste stand toont.
     try {
@@ -281,10 +349,14 @@ async function executeCheck(isManual) {
     }
     lastCheckResult = result;
     if (result.success) {
-      addLog(`${type} check voltooid: ${result.checked} producten, ${result.deals} in de aanbieding (${result.newDeals} nieuw gemeld${result.errors ? `, ${result.errors} fouten` : ''}).`);
+      const outages = (result.outages && result.outages.length)
+        ? `; onbereikbaar: ${result.outages.map(k => siteConfigs[k] ? siteConfigs[k].displayName : k).join(', ')}`
+        : '';
+      addLog(`${type} check voltooid: ${result.checked} producten, ${result.deals} in de aanbieding (${result.newDeals} nieuw gemeld${result.errors ? `, ${result.errors} fouten` : ''}${outages}).`);
     } else {
       addLog(`${type} check mislukt: ${result.error}`);
     }
+    saveStateSoon();
     return result;
   } catch (err) {
     addLog(`${type} check fout: ${err.message}`);
@@ -367,7 +439,7 @@ app.get('/api/search', async (req, res) => {
   if (!KNOWN_SITES.includes(site)) return res.json({ success: false, error: `Onbekende site: ${site}` });
 
   try {
-    const { products, total } = await searchProducts(site, term);
+    const { products, total } = await withScrapeSlot(() => searchProducts(site, term));
     res.json({ success: true, site, term, total, products });
   } catch (err) {
     addLog(`Zoeken naar "${term}" (${site}) mislukt: ${err.message}`);
@@ -406,7 +478,7 @@ app.post('/api/watchlist', async (req, res) => {
   // eventuele aanbieding toont. Mislukt dit, dan volgen we het product tóch
   // (de eerstvolgende check probeert het opnieuw).
   try {
-    const info = await checkProduct(siteKey, codeStr);
+    const info = await withScrapeSlot(() => checkProduct(siteKey, codeStr));
     if (info) {
       item.name = info.name || item.name;
       item.url = info.url || item.url;
@@ -485,7 +557,8 @@ app.post('/api/test-telegram', async (req, res) => {
         body: JSON.stringify({
           chat_id: t.chatId,
           text: `✅ Testbericht vanuit de Multistore Checker! (v${APP_VERSION}, ontvanger ${i + 1}/${targets.length})`
-        })
+        }),
+        signal: AbortSignal.timeout(20000)
       });
       const data = await response.json().catch(() => ({}));
       perTarget.push({
@@ -535,6 +608,6 @@ app.get('/api/logs', (req, res) => {
 // Start
 app.listen(PORT, '0.0.0.0', () => {
   addLog(`Multistore Checker v${APP_VERSION} draait op poort ${PORT}`);
-  setupScheduler();
-  setupGratisScheduler();
+  setupScheduler(INITIAL_CHECK_DELAY_MS);
+  setupGratisScheduler(INITIAL_GRATIS_DELAY_MS);
 });
