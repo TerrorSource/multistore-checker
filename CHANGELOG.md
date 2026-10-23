@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.6.0] — 2026-10-23
+
+### Gratis-checker: "niet bestelbaar" zichtbaar gemaakt
+- Een gratis product met voorraad maar zonder bestelmogelijkheid werd gemeld
+  als "niet op voorraad" — technisch het filterresultaat, maar misleidend.
+  Onderzoek (oktober 2026) liet zien wat er echt speelt: Kruidvat weigert
+  artikelen zonder geldige prijs server-side (winkelwagen-API antwoordt
+  `400 product.invalidPrice`, ook al is er voorraad en is `purchasable`
+  true), en Trekpleister zet de bestelknop op "Uitverkocht" (geen
+  `purchasable`-attribuut) terwijl het magazijn voorraad meldt.
+- Het Telegram-bericht maakt dat onderscheid nu expliciet:
+  **op voorraad** (bestelbaar — dít is het moment om te proberen),
+  **niet bestelbaar (geen prijs)** (Kruidvat), **niet bestelbaar**
+  (Trekpleister), **niet op voorraad**, of **onbekend**.
+- Het "niets gevonden"-bericht vertelt wat er wél gevonden is, bv.
+  "2 gratis producten gevonden, maar geen enkele bestelbaar (1 met voorraad
+  maar zonder bestelmogelijkheid)".
+- Filterlabel in de instellingen heet nu "Alleen bestelbare producten";
+  de werking is ongewijzigd (config-veld blijft `onlyInStock`).
+- Resultaat per site bevat een `unorderable`-telling; 3 nieuwe tests.
+
 ## [2.5.0] — 2026-09-13
 
 ### CI / build

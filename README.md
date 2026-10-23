@@ -39,7 +39,11 @@ stellen:
   mogelijk); dezelfde actie wordt maar één keer gemeld
 - **Gratis producten checker** (uit de multistorechecker): zoekt op alle
   drie de winkels naar producten zonder prijs ("Geen prijs aanwezig") en
-  meldt die via Telegram, met eigen interval en filters
+  meldt die via Telegram, met eigen interval en filters. Per product staat
+  erbij of het écht te bestellen is: *op voorraad* (bestelbaar), *niet
+  bestelbaar (geen prijs)* (Kruidvat weigert artikelen zonder prijs
+  server-side), *niet bestelbaar* (Trekpleister toont "Uitverkocht" ondanks
+  voorraad) of *niet op voorraad*
 - **Scheduler**: automatisch checken op instelbaar interval, plus handmatige check
 - Alle data blijft bewaard in het `/data`-volume
 

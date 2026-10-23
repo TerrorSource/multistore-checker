@@ -89,6 +89,39 @@ function pruneSeen(seen, maxAgeDays) {
   }
 }
 
+// --- Beschikbaarheid ----------------------------------------------------------
+//
+// Bij "geen prijs"-producten is er een belangrijk verschil tussen "niet op
+// voorraad" en "wel voorraad, maar niet te bestellen". Dat laatste is sinds
+// 2026 de normale toestand: Kruidvat weigert een artikel zonder geldige prijs
+// server-side (de winkelwagen-API antwoordt 400 "product.invalidPrice") en
+// Trekpleister zet de bestelknop op "Uitverkocht" (geen purchasable-attribuut)
+// terwijl het magazijn gewoon voorraad meldt. Voor de gebruiker is dat
+// onderscheid precies waar het om gaat, dus we geven het expliciet door.
+//
+//   available   -> te bestellen (dít is het moment om te proberen)
+//   unorderable -> voorraad aanwezig, maar niet te bestellen
+//   outOfStock  -> geen voorraad
+//   unknown     -> geen informatie
+const AVAILABILITY_TEXT = {
+  available: 'op voorraad',
+  outOfStock: 'niet op voorraad',
+  unknown: 'onbekend'
+};
+// De reden achter 'unorderable' verschilt per keten.
+const UNORDERABLE_TEXT = {
+  spartacus: 'niet bestelbaar (geen prijs)',
+  legacy: 'niet bestelbaar'
+};
+
+// inStock blijft bestaan voor de filters: true = bestelbaar, false = niet
+// (uitverkocht óf niet bestelbaar), null = onbekend.
+function inStockOf(availability) {
+  if (availability === 'available') return true;
+  if (availability === 'unknown') return null;
+  return false;
+}
+
 // --- Spartacus (Kruidvat NL/BE) --------------------------------------------
 
 function scrapeSpartacus(html, site) {
@@ -109,22 +142,30 @@ function scrapeSpartacus(html, site) {
     .map(p => {
       let link = p.url || '#';
       if (!link.startsWith('http')) link = site.domain + link;
-      // LET OP: bij deze "geen prijs"-producten is inStockFlag in de praktijk
-      // de betrouwbaarste indicator (gedrag overgenomen uit de
-      // multistorechecker); stock.stockLevelStatus is magazijndata.
-      // Dit verschilt bewust van stores.js (stockStatusOf), waar voor normale
-      // producten juist purchasable leidend is — trek deze twee NIET gelijk
-      // zonder beide cases opnieuw te testen.
-      const inStock = (typeof p.inStockFlag === 'boolean')
-        ? p.inStockFlag
-        : (p.stock && p.stock.stockLevelStatus
-            ? p.stock.stockLevelStatus !== 'outOfStock'
-            : null);
+      // LET OP: bij deze "geen prijs"-producten is inStockFlag de indicator
+      // voor bestelbaarheid (false = de winkelwagen-API weigert het artikel
+      // met "product.invalidPrice"); stock.stockLevelStatus is magazijndata
+      // en zegt alleen of er fysiek voorraad is. Dit verschilt bewust van
+      // stores.js (stockStatusOf), waar voor normale producten juist
+      // purchasable leidend is — trek deze twee NIET gelijk zonder beide cases
+      // opnieuw te testen.
+      const warehouse = p.stock && p.stock.stockLevelStatus;
+      const hasWarehouseStock = Boolean(warehouse) && warehouse !== 'outOfStock';
+      let availability;
+      if (typeof p.inStockFlag === 'boolean') {
+        availability = p.inStockFlag ? 'available' : (hasWarehouseStock ? 'unorderable' : 'outOfStock');
+      } else if (warehouse) {
+        availability = hasWarehouseStock ? 'available' : 'outOfStock';
+      } else {
+        availability = 'unknown';
+      }
       return {
         name: p.name || 'Onbekend',
         link,
         code: String(p.code || 'onbekend'),
-        inStock
+        platform: site.platform,
+        availability,
+        inStock: inStockOf(availability)
       };
     });
 }
@@ -151,12 +192,22 @@ function scrapeLegacy(html, site) {
       || 'Onbekend';
     // De échte koopbaarheid is het boolean attribuut 'purchasable' op de
     // <e2-add-to-cart> in de tegel: aanwezig = te koop, afwezig = niet.
+    // data-item-in-stock is magazijndata: wél voorraad maar geen purchasable
+    // betekent "niet bestelbaar" (de knop toont dan "Uitverkocht").
     const status = tracker.attr('data-item-in-stock') || null;
+    const hasWarehouseStock = Boolean(status) && status !== 'outOfStock';
     const cart = $el.find('e2-add-to-cart');
-    const inStock = cart.length
-      ? cart.attr('purchasable') !== undefined
-      : (status ? status !== 'outOfStock' : null);
-    products.push({ name, link, code: String(code), inStock });
+    let availability;
+    if (cart.length) {
+      availability = cart.attr('purchasable') !== undefined
+        ? 'available'
+        : (hasWarehouseStock ? 'unorderable' : 'outOfStock');
+    } else if (status) {
+      availability = hasWarehouseStock ? 'available' : 'outOfStock';
+    } else {
+      availability = 'unknown';
+    }
+    products.push({ name, link, code: String(code), platform: site.platform, availability, inStock: inStockOf(availability) });
   });
 
   return products;
@@ -183,9 +234,10 @@ async function scrapeSite(site) {
 }
 
 function stockText(p) {
-  if (p.inStock === true) return 'op voorraad';
-  if (p.inStock === false) return 'niet op voorraad';
-  return 'onbekend';
+  if (p.availability === 'unorderable') {
+    return UNORDERABLE_TEXT[p.platform] || 'niet bestelbaar';
+  }
+  return AVAILABILITY_TEXT[p.availability] || AVAILABILITY_TEXT.unknown;
 }
 
 function productLine(p) {
@@ -226,11 +278,12 @@ async function runGratisCheck(config, isManual = false) {
       continue;
     }
 
-    // inStock: true = op voorraad, false = uitverkocht, null = onbekend.
-    // Bij 'alleen op voorraad' houden we true én onbekend aan.
+    // inStock: true = bestelbaar, false = uitverkocht of niet bestelbaar,
+    // null = onbekend. Bij 'alleen bestelbaar' houden we true én onbekend aan.
     const filtered = onlyInStock
       ? products.filter(p => p.inStock !== false)
       : products;
+    const unorderable = products.filter(p => p.availability === 'unorderable').length;
 
     // Markeer nieuw t.o.v. eerder gemelde producten en werk seen bij.
     if (!seen[site.key]) seen[site.key] = {};
@@ -250,13 +303,19 @@ async function runGratisCheck(config, isManual = false) {
       siteKey: site.key,
       totalFound: products.length,
       afterFilter: filtered.length,
+      unorderable,
       newCount: filtered.filter(p => p.isNew).length
     });
 
     if (toReport.length === 0) {
       if (isManual || notifyEmpty) {
+        // Vertel wél wat er gevonden is: "3 gratis producten, geen enkele
+        // bestelbaar" is nuttiger dan een kaal "niets gevonden".
         const why = (onlyNew && !isManual && filtered.length > 0)
           ? 'geen nieuwe producten'
+          : products.length > 0
+            ? `${products.length} gratis product${products.length === 1 ? '' : 'en'} gevonden, maar geen enkele bestelbaar`
+              + (unorderable > 0 ? ` (${unorderable} met voorraad maar zonder bestelmogelijkheid)` : '')
           : 'geen gratis producten gevonden';
         await broadcast(targets, `✅ ${site.displayName}: ${why}.`);
       }
