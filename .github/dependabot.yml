@@ -5,12 +5,27 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Kleine updates in één PR; een major (bv. express 4 -> 5) blijft apart,
+    # zodat die bewust getest wordt.
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-  # Basisimage in de Dockerfile (node:22-alpine).
+    # Alle Actions-bumps samen in één PR i.p.v. vijf losse.
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Basisimage in de Dockerfile. We volgen alleen LTS-versies van Node (even
+  # majors: 22, 24, 26, ...); de oneven "current"-versies worden overgeslagen.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        versions: ["25.x", "27.x", "29.x"]

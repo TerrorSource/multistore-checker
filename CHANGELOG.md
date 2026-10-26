@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.7.0] — 2026-10-26
+
+### Dependencies (de openstaande Dependabot-PR's #1–#9)
+- **Express 4.22 → 5.3**: major-upgrade, volledig groen door de testsuite
+  (41/41, inclusief API, static files en redirects).
+- **Node 22 → 24 LTS** als runtime. Dependabot stelde 25 voor, maar dat is een
+  "current"-versie zonder LTS-status; 24 (LTS tot 2028) is de juiste stap.
+  `engines` blijft `>=22`.
+- **GitHub Actions**: checkout v7, setup-node v7, setup-buildx-action v4,
+  metadata-action v6, build-push-action v7.
+- **Dependabot-configuratie**: Actions-bumps komen voortaan gebundeld in één
+  PR, npm minor/patch ook; oneven (niet-LTS) Node-majors worden genegeerd.
+- De PR's zelf worden niet gemerged: de versiemap in OneDrive is de bron en
+  `commit-git.sh` zou gemergede wijzigingen bij de volgende release weer
+  overschrijven. Dependabot sluit ze vanzelf zodra `main` de update bevat.
+
 ## [2.6.0] — 2026-10-23
 
 ### Gratis-checker: "niet bestelbaar" zichtbaar gemaakt
