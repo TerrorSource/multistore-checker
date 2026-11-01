@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.0] — 2026-11-01
+
+### CI
+- GitHub Actions: `docker/setup-qemu-action` en `docker/login-action` 3 → 4
+  (Dependabot-PR #10, de eerste gebundelde Actions-PR). Geen wijzigingen in
+  de app zelf.
+
 ## [2.7.0] — 2026-10-26
 
 ### Dependencies (de openstaande Dependabot-PR's #1–#9)
