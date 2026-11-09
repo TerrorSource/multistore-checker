@@ -50,20 +50,12 @@ function kvProduct(overrides = {}) {
   };
 }
 
-// Trekpleister-tegel (oude platform).
-function legacyTile({ code, name, price = '3.49', oldPrice = '', inStock = 'inStock', purchasable = true, promoId = '', emptyPrice = false, total = 452 }) {
-  return `<div class="product__list-col">
-    <e2-impression-tracker data-code="${code}" data-item-name="${name}" data-item-url="/p/${code}"
-      data-price="${price}" data-item-price-original="${oldPrice}" data-item-in-stock="${inStock}"
-      data-item-on-promo="${promoId}" data-search-result-total="${total}" data-item-brand="Merk"></e2-impression-tracker>
-    ${emptyPrice ? '<div class="pricebadge__wrapper"><span class="pricebadge--empty-price">Geen prijs aanwezig</span></div>' : ''}
-    <a class="tile__product-slide-link" href="/p/${code}"><img class="tile__product-slide-image" src="/img/${code}.jpg"></a>
-    <e2-add-to-cart size="small" ${purchasable ? 'purchasable' : ''}></e2-add-to-cart>
-  </div>`;
-}
-
-function legacyHtml(tiles) {
-  return `<html><body><div class="product__list">${tiles.join('\n')}</div></body></html>`;
+// OCC-API-zoekantwoord (zoals ICI PARIS XL dat levert).
+function apiSearch(products, pagination = {}) {
+  return {
+    products,
+    pagination: { currentPage: 0, pageSize: 100, totalPages: products.length ? 1 : 0, totalResults: products.length, ...pagination }
+  };
 }
 
 function mockResponse(body, { ok = true, status = 200 } = {}) {
@@ -101,4 +93,4 @@ function telegramRoute(sent, { ok = true, description = null } = {}) {
   }];
 }
 
-module.exports = { useTempDataDir, spartacusHtml, kvProduct, legacyTile, legacyHtml, mockResponse, makeFetch, telegramRoute };
+module.exports = { useTempDataDir, spartacusHtml, apiSearch, kvProduct, mockResponse, makeFetch, telegramRoute };

@@ -2,7 +2,7 @@ const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { useTempDataDir, spartacusHtml, kvProduct, legacyTile, legacyHtml, mockResponse, makeFetch, telegramRoute } = require('./helpers');
+const { useTempDataDir, spartacusHtml, kvProduct, mockResponse, makeFetch, telegramRoute } = require('./helpers');
 
 const dataDir = useTempDataDir();
 const stores = require('../stores');
@@ -83,17 +83,19 @@ test('alleen nieuw: tweede geplande check is stil, handmatig toont alles', async
   assert.doesNotMatch(sent[2].text, /🆕/, 'handmatig: al gezien, geen nieuw-markering');
 });
 
-test('Trekpleister: "Geen prijs aanwezig"-tegels met purchasable-attribuut', async () => {
-  const html = legacyHtml([
-    legacyTile({ code: 'T1', name: 'Gratis ding', emptyPrice: true, purchasable: true }),
-    legacyTile({ code: 'T2', name: 'Uitverkocht ding', emptyPrice: true, purchasable: false, inStock: 'inStock' }),
-    legacyTile({ code: 'T3', name: 'Betaald ding', emptyPrice: false })
+test('Trekpleister (Spartacus): eigen URL, zelfde beschikbaarheidslogica als Kruidvat', async () => {
+  const html = spartacusHtml([
+    kvGratis('T1', true),
+    kvGratis('T2', false, { stockLevelStatus: 'inStock', stockLevel: 5 }),
+    kvProduct({ code: 'T3', price: { value: 3.49 } })
   ]);
-  stores.net.fetch = makeFetch([telegramRoute(sent), [/trekpleister/, () => mockResponse(html)]]);
+  const fetchMock = makeFetch([telegramRoute(sent), [/trekpleister\.nl\/search\/:price-asc\?query=/, () => mockResponse(html)]]);
+  stores.net.fetch = fetchMock;
   const r = await gratis.runGratisCheck(config({ sitesEnabled: ['tp'], onlyInStock: false }), true);
+  assert.equal(r.results[0].site, 'Trekpleister NL');
   assert.equal(r.results[0].totalFound, 2);
-  assert.match(sent[0].text, /Gratis ding.*op voorraad/);
-  assert.match(sent[0].text, /Uitverkocht ding<\/a> \(voorraad: niet bestelbaar\)/, 'magazijn inStock maar geen purchasable');
+  assert.match(sent[0].text, /Gratis T1<\/a> \(voorraad: op voorraad\)/);
+  assert.match(sent[0].text, /Gratis T2<\/a> \(voorraad: niet bestelbaar \(geen prijs\)\)/);
 });
 
 test('storing: HTTP-fout geeft een fout-resultaat en geen "0 gevonden"-bericht', async () => {

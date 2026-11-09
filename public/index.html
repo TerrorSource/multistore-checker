@@ -74,7 +74,36 @@
   <script src="/app.js"></script>
   <script>
     let watchlistItems = [];
-    let lastSearch = { site: 'nl', term: '', products: [], page: 0, total: 0, hasMore: false };
+    let lastSearch = { site: 'nl', term: '', products: [], nextStart: 0, total: 0, hasMore: false };
+
+    // Het laatste zoekresultaat blijft bewaard in de sessie van dit tabblad,
+    // zodat het er nog staat na een uitstapje naar "Gevolgde producten" of
+    // "Instellingen". sessionStorage kan ontbreken of vol zijn (privévenster,
+    // geblokkeerde opslag): dan werkt alles gewoon zonder bewaren.
+    const SEARCH_KEY = 'mc.lastSearch';
+    function saveSearchState() {
+      try {
+        sessionStorage.setItem(SEARCH_KEY, JSON.stringify({
+          ...lastSearch,
+          categories: [...activeCategories],
+          showOutOfStock: document.getElementById('showOutOfStock').checked
+        }));
+      } catch { /* bewaren is een gemak, geen vereiste */ }
+    }
+    function restoreSearchState() {
+      let st = null;
+      try { st = JSON.parse(sessionStorage.getItem(SEARCH_KEY) || 'null'); } catch { st = null; }
+      if (!st || !Array.isArray(st.products) || !st.term) return;
+      lastSearch = {
+        site: st.site || 'nl', term: st.term, products: st.products,
+        nextStart: st.nextStart || st.products.length, total: st.total || st.products.length, hasMore: Boolean(st.hasMore)
+      };
+      document.getElementById('searchInput').value = st.term;
+      const sel = document.getElementById('searchSite');
+      if ([...sel.options].some(o => o.value === lastSearch.site)) sel.value = lastSearch.site;
+      document.getElementById('showOutOfStock').checked = Boolean(st.showOutOfStock);
+      (st.categories || []).forEach(c => { if (PROMO_CATEGORIES[c]) activeCategories.add(c); });
+    }
 
     // Actie-categorieën (zelfde sleutels als de server meegeeft in
     // promoCategory). Geen chip actief = geen categoriefilter.
@@ -100,6 +129,7 @@
           else activeCategories.add(key);
           renderCategoryChips();
           renderSearchResults();
+          saveSearchState();
         });
         row.appendChild(chip);
       }
@@ -166,10 +196,7 @@
       if (lastSearch.hasMore) {
         rows.push(`<div class="btn-row more-row"><button class="btn btn-secondary" id="btnMore">Meer laden (${shown} van ${lastSearch.total})</button></div>`);
       } else if (lastSearch.total > shown) {
-        // Kruidvat levert alleen de eerste pagina (de edge-cache negeert
-        // paginering); een specifiekere zoekterm is daar de enige weg.
-        const kv = site === 'nl' || site === 'be';
-        rows.push(`<div class="empty-note">${shown} van ${lastSearch.total} resultaten geladen${kv ? ' — Kruidvat levert alleen de eerste pagina; verfijn je zoekterm voor de rest' : ''}.</div>`);
+        rows.push(`<div class="empty-note">${shown} van ${lastSearch.total} resultaten geladen.</div>`);
       }
       c.innerHTML = rows.join('');
 
@@ -180,8 +207,9 @@
       if (more) more.addEventListener('click', loadMore);
     }
 
-    async function fetchPage(site, term, page) {
-      const res = await fetch(`/api/search?site=${encodeURIComponent(site)}&q=${encodeURIComponent(term)}&page=${page}`);
+    // Elk verzoek levert tot 100 resultaten vanaf 'start'.
+    async function fetchResults(site, term, start) {
+      const res = await fetch(`/api/search?site=${encodeURIComponent(site)}&q=${encodeURIComponent(term)}&start=${start}`);
       return res.json();
     }
 
@@ -191,12 +219,14 @@
       if (!term) return;
       const btn = document.getElementById('btnSearch');
       btn.disabled = true;
-      btn.textContent = 'Zoeken...';
+      // Tot 100 resultaten = meerdere pagina's bij de winkel: dat duurt even.
+      btn.textContent = 'Zoeken… (tot 100 resultaten)';
       try {
-        const data = await fetchPage(site, term, 0);
+        const data = await fetchResults(site, term, 0);
         if (data.success) {
-          lastSearch = { site, term, products: data.products, page: data.page || 0, total: data.total || data.products.length, hasMore: Boolean(data.hasMore) };
+          lastSearch = { site, term, products: data.products, nextStart: data.nextStart || data.products.length, total: data.total || data.products.length, hasMore: Boolean(data.hasMore) };
           renderSearchResults();
+          saveSearchState();
           if (data.products.length === 0) showToast('Geen producten gevonden', 'info');
         } else {
           showToast('Zoeken mislukt: ' + (data.error || 'onbekende fout'), 'error');
@@ -211,18 +241,19 @@
 
     async function loadMore() {
       const btn = document.getElementById('btnMore');
-      if (btn) { btn.disabled = true; btn.textContent = 'Laden...'; }
+      if (btn) { btn.disabled = true; btn.textContent = 'Volgende 100 laden…'; }
       try {
-        const data = await fetchPage(lastSearch.site, lastSearch.term, lastSearch.page + 1);
+        const data = await fetchResults(lastSearch.site, lastSearch.term, lastSearch.nextStart);
         if (data.success) {
           // Dubbele codes (kan bij verschuivende sortering) overslaan.
           const seen = new Set(lastSearch.products.map(p => p.code));
           const nieuw = data.products.filter(p => !seen.has(p.code));
           lastSearch.products = lastSearch.products.concat(nieuw);
-          lastSearch.page = data.page;
+          lastSearch.nextStart = data.nextStart || lastSearch.nextStart;
           lastSearch.total = data.total || lastSearch.total;
           lastSearch.hasMore = Boolean(data.hasMore) && nieuw.length > 0;
           renderSearchResults();
+          saveSearchState();
         } else {
           showToast('Meer laden mislukt: ' + (data.error || 'onbekende fout'), 'error');
           if (btn) { btn.disabled = false; btn.textContent = 'Meer laden'; }
@@ -303,10 +334,14 @@
     document.getElementById('searchInput').addEventListener('keydown', e => {
       if (e.key === 'Enter') doSearch();
     });
-    document.getElementById('showOutOfStock').addEventListener('change', renderSearchResults);
+    document.getElementById('showOutOfStock').addEventListener('change', () => { renderSearchResults(); saveSearchState(); });
 
+    restoreSearchState();
     renderCategoryChips();
-    loadWatchlist();
+    renderSearchResults();
+    // Watchlist laden en daarna opnieuw renderen, zodat bewaarde resultaten
+    // meteen de juiste "✓ Gevolgd"-status tonen.
+    loadWatchlist().then(renderSearchResults);
     loadStatus();
     setInterval(loadStatus, 15000);
   </script>

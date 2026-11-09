@@ -2,7 +2,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { useTempDataDir, spartacusHtml, kvProduct, mockResponse, makeFetch } = require('./helpers');
+const { useTempDataDir, spartacusHtml, apiSearch, kvProduct, mockResponse, makeFetch } = require('./helpers');
 
 const dataDir = useTempDataDir();
 const stores = require('../stores');
@@ -81,13 +81,24 @@ test('gratis-instellingen: onbekende sites worden weggefilterd', async () => {
   assert.equal(cfg.gratis.onlyNewDays, 1);
 });
 
-test('zoeken geeft producten en paginering door', async () => {
-  stores.net.fetch = makeFetch([[/iciparisxl/, () => mockResponse(spartacusHtml([kvProduct({ code: 'BP_42' })], { totalPages: 2, totalResults: 40, pageSize: 20 }))]]);
+test('zoeken geeft tot 100 producten en een startpunt voor "meer laden"', async () => {
+  stores.settings.pageDelayMs = 0;
+  stores.net.fetch = makeFetch([[/api\.iciparisxl\.nl/, (url) => {
+    const page = Number(new URL(url).searchParams.get('currentPage'));
+    const items = Array.from({ length: 100 }, (_, i) => kvProduct({ code: `BP_${page * 100 + i}` })).filter(p => Number(p.code.slice(3)) < 130);
+    return mockResponse(apiSearch(items, { currentPage: page, totalPages: 2, totalResults: 130, pageSize: 100 }));
+  }]]);
   const r = await get('/api/search?site=ici&q=test');
   assert.equal(r.success, true);
-  assert.equal(r.products[0].code, 'BP_42');
+  assert.equal(r.products.length, 100);
+  assert.equal(r.products[0].code, 'BP_0');
   assert.equal(r.hasMore, true);
-  assert.equal(r.total, 40);
+  assert.equal(r.total, 130);
+  assert.equal(r.nextStart, 100);
+  const r2 = await get('/api/search?site=ici&q=test&start=100');
+  assert.equal(r2.products.length, 30);
+  assert.equal(r2.products[0].code, 'BP_100');
+  assert.equal(r2.hasMore, false);
   const bad = await get('/api/search?site=xx&q=test');
   assert.equal(bad.success, false);
   const leeg = await get('/api/search?site=nl&q=');

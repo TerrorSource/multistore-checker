@@ -495,12 +495,14 @@ app.post('/api/config', (req, res) => {
 app.get('/api/search', async (req, res) => {
   const term = String(req.query.q || '').trim();
   const site = String(req.query.site || 'nl');
-  const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+  // start = index van het eerste resultaat (voor "Meer laden"); per verzoek
+  // maximaal 100 producten, verzameld uit meerdere zoekpagina's.
+  const start = Math.max(0, parseInt(req.query.start, 10) || 0);
   if (!term) return res.json({ success: false, error: 'Geen zoekterm opgegeven' });
   if (!KNOWN_SITES.includes(site)) return res.json({ success: false, error: `Onbekende site: ${site}` });
 
   try {
-    const result = await withScrapeSlot(() => searchProducts(site, term, page));
+    const result = await withScrapeSlot(() => searchProducts(site, term, start, 100));
     res.json({ success: true, site, term, ...result });
   } catch (err) {
     addLog(`Zoeken naar "${term}" (${site}) mislukt: ${err.message}`);

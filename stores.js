@@ -1,75 +1,100 @@
 // Winkel-scrapers voor de A.S. Watson-drogisterijen.
 //
-// Kruidvat NL/BE en ICI PARIS XL draaien op het Spartacus-platform (Angular
-// Universal): de productdata staat server-side gerenderd als JSON in
-// <script id="spartacus-app-state">. De losse OCC product-API zit achter
-// Akamai Bot Manager en is niet rechtstreeks bruikbaar.
+// Alle vier de winkels (Kruidvat NL/BE, Trekpleister, ICI PARIS XL) draaien
+// op het Spartacus-platform (Angular Universal): de productdata staat
+// server-side gerenderd als JSON in <script id="spartacus-app-state">. De
+// losse OCC product-API zit achter Akamai Bot Manager en is niet rechtstreeks
+// bruikbaar. Trekpleister is in het najaar van 2026 van het oude platform
+// (HTML-tegels met <e2-impression-tracker>) naar Spartacus gemigreerd.
 //
-// BELANGRIJK (Spartacus): de zoekterm moet in het URL-PAD staan
-// (/search/<term>). De querystring-variant (?query=... of ?text=...) wordt
-// door de edge-cache genegeerd en levert stale resultaten.
+// BELANGRIJK: de zoekterm moet in het URL-PAD staan (/search/<term>). De
+// querystring-variant (?query=... of ?text=...) levert bij de edge-cache
+// stale of verkeerde resultaten (bij Trekpleister zelfs totaal andere
+// producten).
 //
-// Paginering: ICI honoreert ?currentPage=N op de padvorm. Kruidvat NIET —
-// de edge-cache negeert currentPage (en pageSize, en cache-busters) volledig
-// en serveert altijd dezelfde pagina; getest 2026-09 met alle denkbare
-// varianten. Kruidvat levert dus alleen de eerste pagina (20 resultaten).
+// Paginering: ?currentPage=N op de padvorm (getest 2026-11; in 2026-09
+// negeerde de Kruidvat-edge-cache die parameter nog). pageSize wordt niet
+// gehonoreerd, dus voor 100 resultaten halen we meerdere pagina's op. Als de
+// cache de parameter ooit weer negeert, zien we dat aan een pagina met alleen
+// al bekende producten en stoppen we (zie searchProducts).
 //
-// Trekpleister draait (nog) op het oude platform: productdata staat in
-// data-attributen van <e2-impression-tracker> in de HTML-tegels. De
-// actietekst staat niet op de tegel (alleen een promo-afbeelding) en wordt
-// per unieke actie opgehaald via het PromotionBox-AJAX-endpoint. Paginering
-// werkt daar via ?q=<term>:relevance&page=N (de text=-vorm negeert page).
-
-const cheerio = require('cheerio');
+// ICI PARIS XL zet sinds najaar 2026 GEEN productdata meer in de app-state
+// (alleen facetten); de producten komen client-side uit de OCC-API. Die is
+// server-side gewoon bereikbaar (met actuele browserheaders) en ondersteunt
+// pageSize=100, dus voor ICI gebruiken we die API rechtstreeks (site.api).
+// De Kruidvat-/Trekpleister-API's geven server-side 0 producten terug; daar
+// blijft de HTML-route de bron.
 
 const siteConfigs = {
   nl: {
     key: 'nl',
     displayName: 'Kruidvat NL',
     domain: 'https://www.kruidvat.nl',
-    platform: 'spartacus',
     searchBase: 'https://www.kruidvat.nl/search/',
-    paginates: false
+    pageSize: 20
   },
   be: {
     key: 'be',
     displayName: 'Kruidvat BE',
     domain: 'https://www.kruidvat.be',
-    platform: 'spartacus',
     // BE heeft een /nl/ locale-prefix (anders volgt een 301-redirect).
     searchBase: 'https://www.kruidvat.be/nl/search/',
-    paginates: false
+    pageSize: 20
   },
+  // Trekpleister: topPromotion bevat in de zoekresultaten alleen een actie-ID
+  // en een plaatje; de actietekst (topPromotion.name) staat alleen op de
+  // productpagina en wordt per unieke actie opgehaald (promoTextFromPdp).
   tp: {
     key: 'tp',
     displayName: 'Trekpleister',
     domain: 'https://www.trekpleister.nl',
-    platform: 'legacy',
-    paginates: true
+    searchBase: 'https://www.trekpleister.nl/search/',
+    pageSize: 20,
+    promoTextFromPdp: true
   },
-  // ICI PARIS XL (ook A.S. Watson) draait op hetzelfde Spartacus-platform als
-  // Kruidvat. Let op de afwijkingen: productcodes hebben een BP_-prefix, er is
-  // géén purchasable-veld (stockStatusOf valt terug op stockLevelStatus, wat
-  // hier klopt) en topPromotion staat op vrijwel ÁLLE producten — alleen een
-  // reward met formattedRewardValue is daar een echte actie (zie
-  // mapSpartacusProduct).
+  // ICI PARIS XL wijkt op een paar punten af: productcodes hebben een
+  // BP_-prefix, er is géén purchasable-veld (stockStatusOf valt terug op
+  // stockLevelStatus, wat hier klopt) en topPromotion staat op vrijwel ÁLLE
+  // producten — alleen een reward met formattedRewardValue is daar een echte
+  // actie (zie mapSpartacusProduct).
+  // De OCC-'basesite' (icinl3) is de site-ID die de ICI-frontend zelf
+  // gebruikt; als ICI die ooit wijzigt (eerder bestonden icinl en icinl2),
+  // staat de nieuwe in de netwerkverzoeken van www.iciparisxl.nl/search/x.
   ici: {
     key: 'ici',
     displayName: 'ICI PARIS XL',
     domain: 'https://www.iciparisxl.nl',
-    platform: 'spartacus',
     searchBase: 'https://www.iciparisxl.nl/search/',
-    paginates: true
+    pageSize: 100,
+    api: { base: 'https://api.iciparisxl.nl/api/v2/icinl3', lang: 'nl_NL' }
   }
 };
+
+// Akamai (alle A.S. Watson-sites) weigert te oude browserversies met een 403:
+// in november 2026 werd alles onder Chrome 143 geblokkeerd, waardoor een
+// vaste versie in de code na verloop van tijd álle checks stillegt. Daarom
+// rekenen we de actuele Chrome-major uit: Chrome 140 verscheen op 2 september
+// 2025 en sindsdien komt er elke 4 weken een nieuwe major. We blijven er één
+// onder (een gangbare, stabiele versie). Overschrijven kan met de
+// omgevingsvariabele CHROME_VERSION.
+const CHROME_BASE_VERSION = 140;
+const CHROME_BASE_DATE = Date.UTC(2025, 8, 2);
+const CHROME_CYCLE_MS = 28 * 24 * 60 * 60 * 1000;
+function currentChromeMajor(now = Date.now()) {
+  const fromEnv = parseInt(process.env.CHROME_VERSION, 10);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  const cycles = Math.floor((now - CHROME_BASE_DATE) / CHROME_CYCLE_MS);
+  return Math.max(CHROME_BASE_VERSION, CHROME_BASE_VERSION + cycles - 1);
+}
+const CHROME_MAJOR = currentChromeMajor();
 
 // De VOLLEDIGE headerset is verplicht: met alleen een User-Agent geeft
 // Akamai een 403. Inclusief sec-ch-ua en Sec-Fetch-* werkt het wel.
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+  'User-Agent': `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`,
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'sec-ch-ua': '"Chromium";v="140", "Google Chrome";v="140", "Not.A/Brand";v="99"',
+  'sec-ch-ua': `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not.A/Brand";v="99"`,
   'sec-ch-ua-mobile': '?0',
   'sec-ch-ua-platform': '"macOS"',
   'Upgrade-Insecure-Requests': '1',
@@ -92,6 +117,15 @@ const net = {
 function fetchWithTimeout(url, options = {}) {
   return net.fetch(url, options);
 }
+
+// Instelbaar (o.a. door tests): pauzes tussen opeenvolgende requests.
+const settings = {
+  pageDelayMs: 600,    // tussen zoekpagina's binnen één zoekopdracht
+  promoDelayMs: 400,   // tussen groepjes productpagina's voor actieteksten
+  promoConcurrency: 4  // zoveel productpagina's tegelijk
+};
+
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Eén herkansing bij een tijdelijke fout (HTTP-fout, netwerkhik, timeout),
 // zodat een enkele hik niet meteen als mislukking telt.
@@ -122,14 +156,18 @@ const PROMO_CATEGORIES = {
 
 function classifyPromo(headline) {
   const h = String(headline).toLowerCase();
-  if (/gratis\s+verzending/.test(h)) return 'verzending';
+  if (/gratis\s+verzend/.test(h)) return 'verzending';            // "gratis verzending" én "gratis verzenden"
   if (/\d\s*\+\s*\d/.test(h)) return 'xy-gratis';                 // 1+1, 2+1, 2+2 gratis
   if (/(2e|tweede).*(halve\s+prijs)/.test(h)) return '2e-halve-prijs';
   if (/\d+\s*%/.test(h) || /korting/.test(h)) return 'korting';   // 60% korting, clubacties
   return 'overig';
 }
 
-// --- Spartacus-helpers (Kruidvat NL/BE, ICI) -----------------------------------
+function formatEuro(v) {
+  return (typeof v === 'number' && !isNaN(v)) ? '€ ' + v.toFixed(2).replace('.', ',') : null;
+}
+
+// --- Spartacus-helpers -----------------------------------------------------------
 
 // Spartacus serialiseert de app-state met eigen escaping i.p.v. HTML-entities:
 // &q; -> "  &l; -> <  &g; -> >  &s; -> '  &a; -> &
@@ -165,10 +203,24 @@ function findSearchModel(state) {
   return found;
 }
 
-// Echte online-beschikbaarheid (Spartacus): purchasable zegt of het product
-// te koop is, stock.stockLevelStatus of er voorraad is. inStockFlag is hier
-// bewust NIET gebruikt: dat veld staat ook op false bij producten die gewoon
-// op voorraad zijn. true = op voorraad, false = niet, null = onbekend.
+// Productdetails van één product op een productpagina (PDP): het object met
+// de juiste code dat een topPromotion mét tekst heeft.
+function findProductDetails(state, code) {
+  let found = null;
+  (function walk(o) {
+    if (found || !o || typeof o !== 'object') return;
+    if (String(o.code) === String(code) && o.topPromotion && (o.topPromotion.name || o.topPromotion.description || o.topPromotion.title)) {
+      found = o; return;
+    }
+    for (const k of Object.keys(o)) walk(o[k]);
+  })(state);
+  return found;
+}
+
+// Echte online-beschikbaarheid: purchasable zegt of het product te koop is,
+// stock.stockLevelStatus of er voorraad is. inStockFlag is hier bewust NIET
+// gebruikt: dat veld staat ook op false bij producten die gewoon op voorraad
+// zijn. true = op voorraad, false = niet, null = onbekend.
 // LET OP: dit verschilt bewust van gratis.js (scrapeSpartacus), waar voor de
 // "geen prijs"-producten inStockFlag juist wél de betrouwbare indicator is —
 // trek deze twee NIET gelijk zonder beide cases opnieuw te testen.
@@ -180,6 +232,19 @@ function stockStatusOf(p) {
   }
   if (status) return status !== 'outOfStock';
   return null;
+}
+
+// Afbeeldingen staan in de app-state als { PRIMARY: { list, thumbnail, ... } },
+// maar in de OCC-API als array [{ imageType, format, url }]. Beide vormen
+// komen terug als { list, thumbnail, product }-object (of null).
+function primaryImages(images) {
+  if (!images) return null;
+  if (!Array.isArray(images)) return images.PRIMARY || null;
+  const out = {};
+  for (const img of images) {
+    if (img && img.imageType === 'PRIMARY' && img.format && img.url) out[img.format] = img;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // Zet een ruw Spartacus-product om naar het compacte formaat dat de rest van
@@ -194,9 +259,11 @@ function mapSpartacusProduct(p, site) {
   // leesbare actietekst in badge.headline (1+1, 2e halve prijs, X% korting).
   // Bij ICI PARIS XL staat topPromotion echter op vrijwel ALLE producten en
   // ontbreekt elke tekst; daar is alleen een reward met formattedRewardValue
-  // (bv. "35%" + rewardType DISCOUNT) een echte actie. Zonder tekst én zonder
-  // reward-waarde telt de promo daarom niet mee (de doorgestreepte-prijs-
-  // fallback 'afgeprijsd' vangt prijsverlagingen alsnog op).
+  // (bv. "35%" + rewardType DISCOUNT) een echte actie. Bij Trekpleister staat
+  // er alleen een actie-ID (code) in; de tekst wordt daarna via de
+  // productpagina opgehaald (enrichPromoTexts). Zonder tekst, reward-waarde
+  // of (bij Trekpleister) actie-ID telt de promo niet mee; de doorgestreepte-
+  // prijs-fallback 'afgeprijsd' vangt prijsverlagingen alsnog op.
   const tp = p.topPromotion;
   let promo = null;
   if (tp) {
@@ -206,32 +273,47 @@ function mapSpartacusProduct(p, site) {
         ? `${tp.reward.formattedRewardValue} korting`
         : tp.reward.formattedRewardValue;
     }
-    const category = headline ? classifyPromo(headline) : null;
-    // Alleen 'gratis verzending' is geen echte aanbieding.
-    if (headline && category !== 'verzending') {
+    if (headline) {
+      const category = classifyPromo(headline);
+      // Alleen 'gratis verzending' is geen echte aanbieding.
+      if (category !== 'verzending') {
+        promo = {
+          headline,
+          category,
+          title: tp.title || tp.name || null,
+          // promoCode (bv. "5128851-1066081") is uniek per actie: ideaal om te
+          // onthouden wat al gemeld is. Valt terug op het numerieke actie-id.
+          promoCode: tp.promoCode || (tp.code != null ? String(tp.code) : null),
+          startDate: tp.startDate || null,
+          endDate: tp.endDate || null
+        };
+      }
+    } else if (site.promoTextFromPdp && tp.code != null) {
       promo = {
-        headline,
-        category,
-        title: tp.title || tp.name || null,
-        // promoCode (bv. "5128851-1066081") is uniek per actie: ideaal om te
-        // onthouden wat al gemeld is. Valt terug op het numerieke actie-id.
-        promoCode: tp.promoCode || (tp.code != null ? String(tp.code) : null),
-        startDate: tp.startDate || null,
-        endDate: tp.endDate || null
+        headline: 'Aanbieding',
+        category: 'overig',
+        title: null,
+        promoCode: String(tp.code),
+        startDate: null,
+        endDate: null,
+        needsText: true
       };
     }
   }
 
-  const primary = p.images && p.images.PRIMARY;
+  const primary = primaryImages(p.images);
   const image = primary
     ? ((primary.list && primary.list.url) || (primary.thumbnail && primary.thumbnail.url) || (primary.product && primary.product.url) || null)
     : null;
+  const imageUrl = image && !image.startsWith('http') ? site.domain + image : image;
 
   let priceValue = (typeof price.value === 'number') ? price.value : null;
-  let priceFormatted = price.formattedValue || null;
+  // Prijzen altijd zelf opmaken: Trekpleister en Kruidvat BE leveren
+  // "€ 1.99" (met punt), Kruidvat NL en ICI "€ 1,99".
+  let priceFormatted = formatEuro(priceValue) || price.formattedValue || null;
   // oldValue is gevuld bij een afgeprijsd product (doorgestreepte prijs).
   let oldPriceValue = (typeof price.oldValue === 'number') ? price.oldValue : null;
-  let oldPriceFormatted = price.formattedOldValue || null;
+  let oldPriceFormatted = formatEuro(oldPriceValue) || price.formattedOldValue || null;
   // ICI-datafout (waargenomen 2026-06): de feed levert soms value 0
   // ("Kortingsprijs: Gratis" op de site zelf) met de normale prijs in
   // oldValue. €0 is daar nooit een echte prijs: toon dan de normale prijs
@@ -249,7 +331,7 @@ function mapSpartacusProduct(p, site) {
     code: String(p.code),
     name: p.name || 'Onbekend',
     url,
-    image,
+    image: imageUrl,
     price: priceValue,
     priceFormatted,
     oldPrice: oldPriceValue,
@@ -264,12 +346,43 @@ function mapSpartacusProduct(p, site) {
   };
 }
 
-async function fetchSearchSpartacus(site, term, page = 0) {
-  // Pagina 0 altijd via het pad (verse resultaten). Volgende pagina's alleen
-  // waar de site dat ondersteunt (ICI); bij Kruidvat zou dat dezelfde eerste
-  // pagina opleveren.
+const API_HEADERS = {
+  ...BROWSER_HEADERS,
+  'Accept': 'application/json, text/plain, */*',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-site'
+};
+
+// Eén pagina via de OCC-API (ICI).
+async function fetchSearchPageApi(site, term, page) {
+  const q = new URLSearchParams({
+    fields: 'PLP', query: String(term).trim(), pageSize: String(site.pageSize),
+    currentPage: String(page), lang: site.api.lang, curr: 'EUR'
+  });
+  const res = await net.fetch(`${site.api.base}/products/search?${q}`, {
+    headers: { ...API_HEADERS, 'Origin': site.domain, 'Referer': site.domain + '/' }
+  });
+  if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
+  let data;
+  try { data = await res.json(); } catch { throw new Error(`${site.displayName}: onleesbaar API-antwoord`); }
+  const products = Array.isArray(data.products) ? data.products : [];
+  const pag = data.pagination || {};
+  return {
+    products: products.map(p => mapSpartacusProduct(p, site)),
+    total: pag.totalResults || products.length,
+    page: Number.isInteger(pag.currentPage) ? pag.currentPage : page,
+    pageSize: pag.pageSize || site.pageSize,
+    totalPages: pag.totalPages || (products.length ? 1 : 0)
+  };
+}
+
+// Eén zoekpagina ophalen. Pagina 0 altijd zonder parameter (verse
+// resultaten), volgende pagina's met ?currentPage=N.
+async function fetchSearchPage(site, term, page = 0) {
+  if (site.api) return fetchSearchPageApi(site, term, page);
   let url = site.searchBase + encodeURIComponent(String(term).trim());
-  if (page > 0 && site.paginates) url += `?currentPage=${page}`;
+  if (page > 0) url += `?currentPage=${page}`;
 
   const res = await net.fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
@@ -279,147 +392,61 @@ async function fetchSearchSpartacus(site, term, page = 0) {
   if (!state) throw new Error(`${site.displayName}: spartacus-app-state niet gevonden (sitestructuur gewijzigd?)`);
 
   const model = findSearchModel(state);
-  if (!model) return { products: [], total: 0, page: 0, pageSize: 0, hasMore: false };
+  if (!model) return { products: [], total: 0, page, pageSize: site.pageSize, totalPages: 0 };
 
   const pag = model.pagination || {};
-  const total = pag.totalResults || model.products.length;
-  const current = Number.isInteger(pag.currentPage) ? pag.currentPage : page;
-  const totalPages = pag.totalPages || 1;
   return {
     products: model.products.map(p => mapSpartacusProduct(p, site)),
-    total,
-    page: current,
-    pageSize: pag.pageSize || model.products.length,
-    hasMore: site.paginates && current + 1 < totalPages
+    total: pag.totalResults || model.products.length,
+    page: Number.isInteger(pag.currentPage) ? pag.currentPage : page,
+    pageSize: pag.pageSize || site.pageSize,
+    totalPages: pag.totalPages || 1
   };
 }
 
-// --- Legacy (Trekpleister) ----------------------------------------------------
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-function formatEuro(v) {
-  return (typeof v === 'number' && !isNaN(v)) ? '€ ' + v.toFixed(2).replace('.', ',') : null;
-}
-
-// Haalt de actietekst op voor één productcode via het PromotionBox-endpoint
-// (hetzelfde AJAX-verzoek dat de productpagina doet). Geeft null terug als er
-// niets gevonden wordt.
-async function fetchLegacyPromoText(site, code) {
-  const url = `${site.domain}/view/PromotionBoxComponentController?componentUid=PromotionBoxComponent&currentProductCode=${encodeURIComponent(code)}`;
-  const res = await net.fetch(url, {
-    headers: {
-      ...BROWSER_HEADERS,
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
-      'X-Requested-With': 'XMLHttpRequest',
-      'Referer': `${site.domain}/`
-    }
-  });
+// Actieteksten ophalen voor winkels die ze alleen op de productpagina tonen
+// (Trekpleister): één productpagina per unieke actie (meerdere producten
+// delen dezelfde actie), met een kleine pauze ertussen. De limiet voorkomt
+// tientallen extra requests bij brede zoekopdrachten; producten zonder
+// opgehaalde tekst houden het generieke label "Aanbieding".
+const MAX_PROMO_LOOKUPS = 20;
+async function fetchPdpPromo(site, product) {
+  if (!product.url) return null;
+  const res = await net.fetch(product.url, { headers: BROWSER_HEADERS, redirect: 'follow' });
   if (!res.ok) return null;
-  const html = await res.text();
-  const $ = cheerio.load(html);
-  const headline = $('.promotion-box__information-text').first().text().trim();
-  if (!headline) return null;
-  const promoUrl = $('.promotion-box').first().attr('href') || null;
-  return { headline, promoUrl };
-}
-
-// Zet een Trekpleister-tegel om naar hetzelfde compacte productformaat.
-function mapLegacyTile($, el, site) {
-  const $el = $(el);
-  const t = $el.find('e2-impression-tracker');
-  if (!t.length || !t.attr('data-code')) return null;
-
-  let url = t.attr('data-item-url') || $el.find('a.tile__product-slide-link').attr('href') || '';
-  if (url && !url.startsWith('http')) url = site.domain + url;
-
-  let image = $el.find('img.tile__product-slide-image').attr('src')
-    || $el.find('img.tile__product-slide-image').attr('data-src') || null;
-  if (image && !image.startsWith('http')) image = site.domain + image;
-
-  const price = parseFloat(t.attr('data-price'));
-  const oldPrice = parseFloat(t.attr('data-item-price-original'));
-  const priceValue = isNaN(price) ? null : price;
-  const oldPriceValue = isNaN(oldPrice) ? null : oldPrice;
-  const isMarkdown = oldPriceValue != null && priceValue != null && oldPriceValue > priceValue;
-
-  // Koopbaarheid: het boolean attribuut 'purchasable' op <e2-add-to-cart>
-  // (aanwezig = te koop); data-item-in-stock is magazijndata en de fallback.
-  const cart = $el.find('e2-add-to-cart');
-  const status = t.attr('data-item-in-stock') || null;
-  const inStock = cart.length
-    ? cart.attr('purchasable') !== undefined
-    : (status ? status !== 'outOfStock' : null);
-
-  // Op de tegel staat alleen het actie-ID (de tekst is een afbeelding); de
-  // echte actietekst wordt daarna per uniek ID opgehaald via PromotionBox.
-  const promoId = (t.attr('data-item-on-promo') || '').trim() || null;
-
+  const details = findProductDetails(extractSpartacusState(await res.text()) || {}, product.code);
+  if (!details) return null;
+  const tp = details.topPromotion;
   return {
-    code: String(t.attr('data-code')),
-    name: t.attr('data-item-name') || 'Onbekend',
-    url,
-    image,
-    price: priceValue,
-    priceFormatted: formatEuro(priceValue),
-    oldPrice: oldPriceValue,
-    oldPriceFormatted: formatEuro(oldPriceValue),
-    promoCategory: promoId ? 'overig' : (isMarkdown ? 'afgeprijsd' : null),
-    inStock,
-    brand: t.attr('data-item-brand') || null,
-    promo: promoId ? {
-      headline: 'Aanbieding',
-      category: 'overig',
-      title: null,
-      promoCode: promoId,
-      startDate: null,
-      endDate: null
-    } : null
+    headline: tp.name || tp.title || tp.description,
+    promoCode: tp.promoCode || (tp.code != null ? String(tp.code) : null),
+    startDate: tp.startDate || null,
+    endDate: tp.endDate || null
   };
 }
 
-async function fetchSearchLegacy(site, term, page = 0) {
-  const t = String(term).trim();
-  // Pagina 0 via de text=-vorm (bewezen vers); volgende pagina's via de
-  // q=<term>:relevance&page=N-vorm — de text=-vorm negeert de page-parameter.
-  const url = page > 0
-    ? `${site.domain}/search?q=${encodeURIComponent(t + ':relevance')}&page=${page}`
-    : `${site.domain}/search?text=${encodeURIComponent(t)}`;
-  const res = await net.fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
-  if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
-
-  const html = await res.text();
-  const $ = cheerio.load(html);
-  const products = [];
-  $('.product__list-col').each((_, el) => {
-    const p = mapLegacyTile($, el, site);
-    if (p) products.push(p);
-  });
-
-  // Actieteksten ophalen: één PromotionBox-verzoek per unieke actie (meerdere
-  // producten delen dezelfde actie), met een kleine pauze ertussen. De limiet
-  // voorkomt tientallen extra requests bij brede zoekopdrachten; overschrijding
-  // wordt gelogd zodat een stille aftopping zichtbaar is.
-  const MAX_PROMO_LOOKUPS = 20;
-  const promoIds = [...new Set(products.filter(p => p.promo).map(p => p.promo.promoCode))];
-  if (promoIds.length > MAX_PROMO_LOOKUPS) {
-    console.warn(`${site.displayName}: ${promoIds.length - MAX_PROMO_LOOKUPS} van ${promoIds.length} actieteksten niet opgehaald (limiet ${MAX_PROMO_LOOKUPS}); die producten houden het generieke label "Aanbieding".`);
+async function enrichPromoTexts(site, products) {
+  if (!site.promoTextFromPdp) return;
+  const pending = products.filter(p => p.promo && p.promo.needsText);
+  const ids = [...new Set(pending.map(p => p.promo.promoCode))];
+  if (ids.length > MAX_PROMO_LOOKUPS) {
+    console.warn(`${site.displayName}: ${ids.length - MAX_PROMO_LOOKUPS} van ${ids.length} actieteksten niet opgehaald (limiet ${MAX_PROMO_LOOKUPS}); die producten houden het label "Aanbieding".`);
   }
-  const promoTexts = {};
-  for (const [i, id] of promoIds.slice(0, MAX_PROMO_LOOKUPS).entries()) {
-    const rep = products.find(p => p.promo && p.promo.promoCode === id);
-    if (i > 0) await delay(400);
-    try {
-      const info = await fetchLegacyPromoText(site, rep.code);
-      if (info) promoTexts[id] = info;
-    } catch { /* actietekst is nice-to-have */ }
+  const texts = {};
+  const todo = ids.slice(0, MAX_PROMO_LOOKUPS);
+  const groupSize = Math.max(1, settings.promoConcurrency || 1);
+  for (let i = 0; i < todo.length; i += groupSize) {
+    if (i > 0) await delay(settings.promoDelayMs);
+    await Promise.all(todo.slice(i, i + groupSize).map(async id => {
+      try {
+        const info = await fetchPdpPromo(site, pending.find(p => p.promo.promoCode === id));
+        if (info && info.headline) texts[id] = info;
+      } catch { /* actietekst is nice-to-have */ }
+    }));
   }
-
-  for (const p of products) {
-    if (!p.promo) continue;
-    const info = promoTexts[p.promo.promoCode];
+  for (const p of pending) {
+    const info = texts[p.promo.promoCode];
+    delete p.promo.needsText;
     if (!info) continue;
     const category = classifyPromo(info.headline);
     if (category === 'verzending') {
@@ -427,47 +454,85 @@ async function fetchSearchLegacy(site, term, page = 0) {
       p.promo = null;
       p.promoCategory = (p.oldPrice != null && p.price != null && p.oldPrice > p.price) ? 'afgeprijsd' : null;
     } else {
-      p.promo.headline = info.headline;
-      p.promo.category = category;
+      Object.assign(p.promo, {
+        headline: info.headline,
+        category,
+        title: info.headline,
+        promoCode: info.promoCode || p.promo.promoCode,
+        startDate: info.startDate,
+        endDate: info.endDate
+      });
       p.promoCategory = category;
     }
   }
-
-  const totalAttr = $('.product__list-col e2-impression-tracker').first().attr('data-search-result-total');
-  const totalParsed = parseInt(totalAttr, 10);
-  const total = isNaN(totalParsed) ? products.length : totalParsed;
-  const pageSize = products.length;
-
-  return {
-    products,
-    total,
-    page,
-    pageSize,
-    hasMore: pageSize > 0 && (page + 1) * pageSize < total
-  };
 }
 
 // --- Publieke API --------------------------------------------------------------
 
-async function fetchSearch(siteKey, term, page = 0) {
+function siteOf(siteKey) {
   const site = siteConfigs[siteKey];
   if (!site) throw new Error(`Onbekende site: ${siteKey}`);
-  return site.platform === 'legacy'
-    ? fetchSearchLegacy(site, term, page)
-    : fetchSearchSpartacus(site, term, page);
+  return site;
 }
 
-// Vrije zoekopdracht voor het dashboard (met paginering waar de winkel dat
-// ondersteunt; zie de toelichting bovenaan).
-async function searchProducts(siteKey, term, page = 0) {
-  return fetchSearch(siteKey, term, page);
+// Vrije zoekopdracht voor het dashboard: verzamelt vanaf resultaat `start`
+// zoveel pagina's als nodig voor `limit` producten. nextStart is het
+// startpunt voor "Meer laden". Stopt vroegtijdig als een pagina alleen al
+// bekende producten bevat (dan negeert de edge-cache de paginering weer).
+async function searchProducts(siteKey, term, start = 0, limit = 100) {
+  const site = siteOf(siteKey);
+  let pageSize = site.pageSize || 20;
+  let page = Math.floor(start / pageSize);
+  let skip = start % pageSize;
+  const products = [];
+  const seen = new Set();
+  let total = 0;
+  let nextStart = start;
+  let exhausted = false;
+
+  for (let n = 0; products.length < limit; n++) {
+    if (n > 0) await delay(settings.pageDelayMs);
+    const r = await fetchSearchPage(site, term, page);
+    total = r.total;
+    pageSize = r.pageSize || pageSize;
+
+    const fresh = r.products.filter(p => !seen.has(p.code));
+    if (r.products.length === 0 || (n > 0 && fresh.length === 0)) { exhausted = true; break; }
+
+    const items = r.products.slice(skip);
+    let consumed = skip;
+    skip = 0;
+    for (const p of items) {
+      if (products.length >= limit) break;
+      consumed++;
+      if (seen.has(p.code)) continue;
+      seen.add(p.code);
+      products.push(p);
+    }
+    nextStart = page * pageSize + consumed;
+    if (consumed < r.products.length) break;        // limiet halverwege deze pagina bereikt
+    if (page + 1 >= r.totalPages) { exhausted = true; break; }
+    page++;
+  }
+
+  await enrichPromoTexts(site, products);
+  return {
+    products,
+    total,
+    start,
+    nextStart,
+    hasMore: !exhausted && nextStart < total
+  };
 }
 
 // Status van één gevolgd product: zoeken op productcode geeft precies dat
 // product terug, inclusief actuele prijs en eventuele actie.
 async function checkProduct(siteKey, code) {
-  const { products } = await fetchSearch(siteKey, code);
-  return products.find(p => p.code === String(code)) || null;
+  const site = siteOf(siteKey);
+  const { products } = await fetchSearchPage(site, code, 0);
+  const p = products.find(x => x.code === String(code)) || null;
+  if (p) await enrichPromoTexts(site, [p]);
+  return p;
 }
 
 module.exports = {
@@ -478,8 +543,11 @@ module.exports = {
   classifyPromo,
   // Herbruikbaar voor andere scrapers (o.a. gratis-producten-checker) en tests:
   BROWSER_HEADERS,
+  CHROME_MAJOR,
+  currentChromeMajor,
   FETCH_TIMEOUT_MS,
   net,
+  settings,
   fetchWithTimeout,
   withRetry,
   extractSpartacusState,

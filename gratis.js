@@ -1,8 +1,8 @@
 // Gratis-producten-checker, overgenomen uit de multistorechecker: zoekt op
 // Kruidvat NL/BE en Trekpleister naar producten zonder prijs (verkoopprijs
-// 0 - 0.48 EUR, "Geen prijs aanwezig") en meldt die via Telegram.
+// 0 - 0.48 EUR, "Geen prijs aanwezig") en meldt die via Telegram. Alle drie
+// draaien op Spartacus (Trekpleister sinds najaar 2026).
 
-const cheerio = require('cheerio');
 const path = require('path');
 // Via het module-object aangeroepen (stores.net.fetch, stores.withRetry),
 // zodat tests de netwerkkant kunnen vervangen.
@@ -49,16 +49,14 @@ const gratisSites = {
     // BE heeft een /nl/ locale-prefix (anders volgt een 301-redirect).
     checkUrl: `https://www.kruidvat.be/nl/search/:price-asc?query=${QUERY}&pageSize=100&sortCode=price-asc`
   },
-  // Trekpleister is (nog) niet gemigreerd en gebruikt de oude HTML-structuur
-  // met .product__list-col / .pricebadge--empty-price.
+  // Trekpleister is in het najaar van 2026 naar Spartacus gemigreerd en
+  // gebruikt nu dezelfde URL-vorm als Kruidvat.
   tp: {
     key: 'tp',
     displayName: 'Trekpleister NL',
     domain: 'https://www.trekpleister.nl',
-    platform: 'legacy',
-    // LET OP: %20 als spatie-encoding; %2B (plus) wordt door Trekpleister
-    // geweigerd met HTTP 400.
-    checkUrl: 'https://www.trekpleister.nl/search?q=%3A%3AsalePriceRange%3A0%20TO%200.48&text=%3Ascore&searchType=manual&page=0&size=100&sort=price-asc'
+    platform: 'spartacus',
+    checkUrl: `https://www.trekpleister.nl/search/:price-asc?query=${QUERY}&pageSize=100&sortCode=price-asc`
   }
 };
 
@@ -94,9 +92,9 @@ function pruneSeen(seen, maxAgeDays) {
 // Bij "geen prijs"-producten is er een belangrijk verschil tussen "niet op
 // voorraad" en "wel voorraad, maar niet te bestellen". Dat laatste is sinds
 // 2026 de normale toestand: Kruidvat weigert een artikel zonder geldige prijs
-// server-side (de winkelwagen-API antwoordt 400 "product.invalidPrice") en
-// Trekpleister zet de bestelknop op "Uitverkocht" (geen purchasable-attribuut)
-// terwijl het magazijn gewoon voorraad meldt. Voor de gebruiker is dat
+// server-side (de winkelwagen-API antwoordt 400 "product.invalidPrice"), en
+// Trekpleister sinds de migratie naar Spartacus net zo. Het magazijn meldt
+// daarbij vaak gewoon voorraad. Voor de gebruiker is dat
 // onderscheid precies waar het om gaat, dus we geven het expliciet door.
 //
 //   available   -> te bestellen (dít is het moment om te proberen)
@@ -108,11 +106,7 @@ const AVAILABILITY_TEXT = {
   outOfStock: 'niet op voorraad',
   unknown: 'onbekend'
 };
-// De reden achter 'unorderable' verschilt per keten.
-const UNORDERABLE_TEXT = {
-  spartacus: 'niet bestelbaar (geen prijs)',
-  legacy: 'niet bestelbaar'
-};
+const UNORDERABLE_TEXT = 'niet bestelbaar (geen prijs)';
 
 // inStock blijft bestaan voor de filters: true = bestelbaar, false = niet
 // (uitverkocht óf niet bestelbaar), null = onbekend.
@@ -122,7 +116,7 @@ function inStockOf(availability) {
   return false;
 }
 
-// --- Spartacus (Kruidvat NL/BE) --------------------------------------------
+// --- Scraper (Spartacus: Kruidvat NL/BE en Trekpleister) ------------------
 
 function scrapeSpartacus(html, site) {
   const state = extractSpartacusState(html);
@@ -163,54 +157,10 @@ function scrapeSpartacus(html, site) {
         name: p.name || 'Onbekend',
         link,
         code: String(p.code || 'onbekend'),
-        platform: site.platform,
         availability,
         inStock: inStockOf(availability)
       };
     });
-}
-
-// --- Legacy (Trekpleister) --------------------------------------------------
-
-function scrapeLegacy(html, site) {
-  const $ = cheerio.load(html);
-  const products = [];
-
-  $('.product__list-col').each((_, el) => {
-    const $el = $(el);
-    const badge = $el.find('.pricebadge--empty-price');
-    if (!(badge.length && badge.text().includes('Geen prijs aanwezig'))) return;
-
-    const tracker = $el.find('e2-impression-tracker');
-    const code = tracker.attr('data-code') || 'onbekend';
-    let link = tracker.attr('data-item-url')
-      || $el.find('a.tile__product-slide-link').attr('href')
-      || '#';
-    if (!link.startsWith('http')) link = site.domain + link;
-    const name = tracker.attr('data-item-name')
-      || $el.find('.tile__product-slide-product-name').text().trim()
-      || 'Onbekend';
-    // De échte koopbaarheid is het boolean attribuut 'purchasable' op de
-    // <e2-add-to-cart> in de tegel: aanwezig = te koop, afwezig = niet.
-    // data-item-in-stock is magazijndata: wél voorraad maar geen purchasable
-    // betekent "niet bestelbaar" (de knop toont dan "Uitverkocht").
-    const status = tracker.attr('data-item-in-stock') || null;
-    const hasWarehouseStock = Boolean(status) && status !== 'outOfStock';
-    const cart = $el.find('e2-add-to-cart');
-    let availability;
-    if (cart.length) {
-      availability = cart.attr('purchasable') !== undefined
-        ? 'available'
-        : (hasWarehouseStock ? 'unorderable' : 'outOfStock');
-    } else if (status) {
-      availability = hasWarehouseStock ? 'available' : 'outOfStock';
-    } else {
-      availability = 'unknown';
-    }
-    products.push({ name, link, code: String(code), platform: site.platform, availability, inStock: inStockOf(availability) });
-  });
-
-  return products;
 }
 
 // --- Check ------------------------------------------------------------------
@@ -224,9 +174,7 @@ async function scrapeSite(site) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();
     });
-    return site.platform === 'spartacus'
-      ? scrapeSpartacus(html, site)
-      : scrapeLegacy(html, site);
+    return scrapeSpartacus(html, site);
   } catch (err) {
     console.error(`${site.displayName}: ophalen mislukt: ${err.message}`);
     return null;
@@ -234,9 +182,7 @@ async function scrapeSite(site) {
 }
 
 function stockText(p) {
-  if (p.availability === 'unorderable') {
-    return UNORDERABLE_TEXT[p.platform] || 'niet bestelbaar';
-  }
+  if (p.availability === 'unorderable') return UNORDERABLE_TEXT;
   return AVAILABILITY_TEXT[p.availability] || AVAILABILITY_TEXT.unknown;
 }
 

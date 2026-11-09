@@ -25,7 +25,9 @@ stellen:
 - **Zoeken** (hoofdpagina): producten zoeken op naam of productcode, per
   winkel (Kruidvat NL/BE, Trekpleister, ICI PARIS XL), met statusbalk en een
   filter om producten die niet op voorraad zijn ook te tonen (standaard
-  verborgen)
+  verborgen). Per zoekopdracht tot 100 resultaten, met "Meer laden" voor de
+  volgende 100. Het laatste zoekresultaat (incl. filters) blijft staan als je
+  naar een andere pagina gaat en terugkomt (bewaard per browsertabblad)
 - **Actie-categorieën**: elke aanbieding wordt ingedeeld in een categorie
   (1+1 / X+Y gratis, 2e halve prijs, % korting, afgeprijsd, overig) waarop je
   in de zoekresultaten kunt filteren. "Gratis verzending" telt niet als
@@ -41,15 +43,15 @@ stellen:
   drie de winkels naar producten zonder prijs ("Geen prijs aanwezig") en
   meldt die via Telegram, met eigen interval en filters. Per product staat
   erbij of het écht te bestellen is: *op voorraad* (bestelbaar), *niet
-  bestelbaar (geen prijs)* (Kruidvat weigert artikelen zonder prijs
-  server-side), *niet bestelbaar* (Trekpleister toont "Uitverkocht" ondanks
-  voorraad) of *niet op voorraad*
+  bestelbaar (geen prijs)* (de winkel weigert artikelen zonder prijs
+  server-side, ook als er voorraad is) of *niet op voorraad*
 - **Scheduler**: automatisch checken op instelbaar interval, plus handmatige check
 - Alle data blijft bewaard in het `/data`-volume
 
 ## Techniek
 
-**Kruidvat NL/BE en ICI PARIS XL** draaien op het SAP Spartacus-platform. De losse
+**Alle vier de winkels** draaien op het SAP Spartacus-platform (Trekpleister sinds
+het najaar van 2026). De losse
 product-API zit achter Akamai Bot Manager, maar de zoekpagina rendert alle
 productdata server-side als JSON in `<script id="spartacus-app-state">`. De
 app haalt per gevolgd product `https://www.kruidvat.nl/search/<productcode>`
@@ -58,22 +60,28 @@ de edge-cache genegeerd) en leest daar prijs, voorraad en `topPromotion` uit.
 `promoCode` is uniek per actieperiode en wordt gebruikt om te onthouden wat
 al gemeld is (`/data/notified.json`).
 
-**ICI PARIS XL** wijkt binnen Spartacus op drie punten af (afgevangen in
-`stores.js`): productcodes hebben een `BP_`-prefix, er is geen
+Voor 100 zoekresultaten worden meerdere zoekpagina's (20 per pagina) opgehaald
+via `?currentPage=N`; `pageSize` wordt door de sites genegeerd.
+
+**ICI PARIS XL** zet geen productdata meer in de pagina; de app gebruikt daar
+de OCC-API (`api.iciparisxl.nl/api/v2/icinl3/products/search`), die server-side
+bereikbaar is en 100 resultaten per verzoek levert. Verder wijkt ICI op drie
+punten af (afgevangen in `stores.js`): productcodes hebben een `BP_`-prefix, er is geen
 `purchasable`-veld (voorraad komt uit `stock.stockLevelStatus`), en
 `topPromotion` staat op vrijwel álle producten zonder tekst — alleen een
 `reward` met `formattedRewardValue` ("35%") telt als echte actie. Levert de
 feed `value: 0` ("Kortingsprijs: Gratis" op de site), dan wordt de normale
 prijs uit `oldValue` getoond.
 
-**Trekpleister** draait nog op het oude platform: productdata staat in
-data-attributen van `<e2-impression-tracker>` in de HTML-tegels
-(naam, prijs, oude prijs, voorraad, actie-ID). De actietekst staat niet op de
-tegel en wordt per unieke actie opgehaald via het
-`PromotionBoxComponentController`-AJAX-endpoint.
+**Trekpleister** geeft in de zoekresultaten alleen een actie-ID; de
+actietekst (met einddatum) staat op de productpagina en wordt per unieke
+actie opgehaald (maximaal 20 per zoekopdracht, 4 tegelijk).
 
 Voor alle verzoeken is de volledige browser-headerset vereist (inclusief
-`sec-ch-ua` en `Sec-Fetch-*`), anders blokkeert Akamai met een 403.
+`sec-ch-ua` en `Sec-Fetch-*`), anders blokkeert Akamai met een 403. Akamai
+weigert bovendien te oude Chrome-versies (in november 2026: alles onder 143);
+de app rekent daarom de actuele Chrome-versie uit de datum uit (4 weken per
+versie). Overschrijven kan met `CHROME_VERSION`.
 
 ### Robuustheid
 
@@ -95,8 +103,9 @@ Voor alle verzoeken is de volledige browser-headerset vereist (inclusief
   bestand wordt als `.corrupt` bewaard in plaats van overschreven.
 - Telegram-fouten verschijnen in het log en als waarschuwing bovenaan het
   dashboard.
-- Zoekresultaten: Trekpleister en ICI PARIS XL laden verder met "Meer laden";
-  Kruidvat levert alleen de eerste pagina (de edge-cache negeert paginering).
+- Zoeken stopt vanzelf als een winkel de paginering negeert (een pagina met
+  alleen al bekende producten), in plaats van vijf keer dezelfde pagina op te
+  halen.
 - De container start als root om de rechten op het datavolume recht te
   zetten en draait daarna als de onbevoorrechte gebruiker `node`
   (zie `entrypoint.sh`). Lukt dat niet, dan valt hij terug op root met een
@@ -132,6 +141,7 @@ docker run -d --name multistore-checker \
 | `TELEGRAM_BOT_TOKEN` | Eerste Telegram-bot (alleen bij eerste start) | – |
 | `TELEGRAM_CHAT_ID` | Bijbehorende chat-ID | – |
 | `CHECK_INTERVAL` | Standaard interval in minuten | `360` |
+| `CHROME_VERSION` | Chrome-versie in de browserheaders (standaard uit de datum berekend) | – |
 | `UPDATE_CHECK` | `false` schakelt de dagelijkse versie-check op GitHub uit | `true` |
 | `UPDATE_REPO` | Repo waarvan de versie-tags gelezen worden | `TerrorSource/multistore-checker` |
 

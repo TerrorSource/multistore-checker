@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.9.0] — 2026-11-09
+
+### Opgelost — alle winkels werden geblokkeerd
+- **Akamai weigerde de app met HTTP 403 op alle vier de winkels**: de
+  User-Agent stond vast op Chrome 140, en Akamai blokkeert sinds november 2026
+  alles onder Chrome 143. Zoeken, de watchlist én de gratis-checker lagen
+  daardoor stil. De Chrome-versie wordt nu uit de datum berekend (Chrome 140
+  = 2 september 2025, daarna elke 4 weken een major), zodat hij niet meer
+  veroudert. Overschrijven kan met `CHROME_VERSION`.
+
+### Gewijzigd — Trekpleister en ICI PARIS XL hebben hun site omgebouwd
+- **Trekpleister draait nu op Spartacus**, net als Kruidvat. De oude
+  HTML-scraper vond niets meer; zoeken, watchlist en gratis-checker gebruiken
+  nu dezelfde Spartacus-route. Actieteksten (met einddatum) komen van de
+  productpagina, één per unieke actie, vier tegelijk. Bestaande Trekpleister-
+  producten op de watchlist blijven werken (zelfde productcodes).
+- **ICI PARIS XL zet geen productdata meer in de pagina**; zoeken en de
+  watchlist gebruiken daar nu de OCC-API (`icinl3`), die 100 resultaten per
+  verzoek levert.
+- `cheerio` is als dependency vervallen (geen HTML-tegels meer te parsen).
+
+### Toegevoegd
+- **Tot 100 zoekresultaten per zoekopdracht** (was 20): meerdere zoekpagina's
+  worden samengevoegd; "Meer laden" haalt de volgende 100. Kruidvat
+  pagineert inmiddels wél via `?currentPage=N`. Gaat een winkel de
+  paginering weer negeren, dan stopt het zoeken na één herhaalde pagina.
+- **Het zoekresultaat blijft staan** als je naar "Gevolgde producten" of
+  "Instellingen" gaat en terugkomt, inclusief zoekterm, winkel, voorraad-
+  vinkje en actie-filters (per browsertabblad, in sessionStorage).
+- Prijzen worden overal met een komma getoond (Trekpleister en Kruidvat BE
+  leverden "€ 1.99").
+- "Gratis verzenden" (naast "gratis verzending") telt niet als aanbieding.
+- Tests: 47 (was 41), o.a. paginering, "meer laden" midden in een pagina,
+  Trekpleister-actieteksten, de ICI-API en de Chrome-versieberekening.
+
 ## [2.8.0] — 2026-11-01
 
 ### CI

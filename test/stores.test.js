@@ -1,8 +1,10 @@
 const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const stores = require('../stores');
-const { spartacusHtml, kvProduct, legacyTile, legacyHtml, mockResponse, makeFetch } = require('./helpers');
+const { spartacusHtml, apiSearch, kvProduct, mockResponse, makeFetch } = require('./helpers');
 
+stores.settings.pageDelayMs = 0;
+stores.settings.promoDelayMs = 0;
 beforeEach(() => { stores.net.fetch = makeFetch([]); });
 
 test('classifyPromo deelt actieteksten in', () => {
@@ -61,7 +63,7 @@ test('ICI: reward zonder tekst wordt "35% korting"; promo zonder reward-waarde t
     purchasable: undefined, topPromotion: { badge: { image: {} }, promoCode: '4516-1', reward: { formattedRewardValue: '35%', rewardType: 'DISCOUNT', promoAmount: 10.5 } } });
   const zonder = kvProduct({ code: 'BP_2', price: { value: 28, formattedValue: '€ 28,00' }, purchasable: undefined,
     topPromotion: { badge: { image: {} }, reward: { promoAmount: 27.5 } } });
-  stores.net.fetch = makeFetch([[/iciparisxl/, () => mockResponse(spartacusHtml([met, zonder]))]]);
+  stores.net.fetch = makeFetch([[/api\.iciparisxl\.nl/, () => mockResponse(apiSearch([met, zonder]))]]);
   const { products } = await stores.searchProducts('ici', 'x');
   assert.equal(products[0].promo.headline, '35% korting');
   assert.equal(products[0].promoCategory, 'korting');
@@ -73,7 +75,7 @@ test('ICI: reward zonder tekst wordt "35% korting"; promo zonder reward-waarde t
 test('ICI: prijs €0 met oldValue wordt de normale prijs, zonder afgeprijsd-claim', async () => {
   const p = kvProduct({ code: 'BP_3', purchasable: undefined,
     price: { value: 0, formattedValue: '€ 0,00', oldValue: 28, formattedOldValue: '€ 28,00' } });
-  stores.net.fetch = makeFetch([[/iciparisxl/, () => mockResponse(spartacusHtml([p]))]]);
+  stores.net.fetch = makeFetch([[/api\.iciparisxl\.nl/, () => mockResponse(apiSearch([p]))]]);
   const { products } = await stores.searchProducts('ici', 'x');
   assert.equal(products[0].price, 28);
   assert.equal(products[0].priceFormatted, '€ 28,00');
@@ -81,49 +83,96 @@ test('ICI: prijs €0 met oldValue wordt de normale prijs, zonder afgeprijsd-cla
   assert.equal(products[0].promoCategory, null);
 });
 
-test('ICI: paginering geeft hasMore en vraagt de volgende pagina op via currentPage', async () => {
-  const fetchMock = makeFetch([[/iciparisxl/, (url) => {
+// Nep-zoekmachine: 'total' producten verdeeld over pagina's van 'size'.
+function pagedSearch(prefix, total, size) {
+  const totalPages = Math.ceil(total / size);
+  return (url) => {
     const page = /currentPage=(\d+)/.test(url) ? Number(RegExp.$1) : 0;
-    return mockResponse(spartacusHtml([kvProduct({ code: `P${page}` })], { currentPage: page, pageSize: 1, totalPages: 3, totalResults: 3 }));
-  }]]);
+    const items = [];
+    for (let i = page * size; i < Math.min(total, (page + 1) * size); i++) items.push(kvProduct({ code: `${prefix}${i}` }));
+    return mockResponse(spartacusHtml(items, { currentPage: page, pageSize: size, totalPages, totalResults: total }));
+  };
+}
+
+test('zoeken verzamelt meerdere pagina\'s tot 100 resultaten', async () => {
+  const fetchMock = makeFetch([[/kruidvat/, pagedSearch('K', 236, 20)]]);
   stores.net.fetch = fetchMock;
-  const p0 = await stores.searchProducts('ici', 'mascara', 0);
-  assert.equal(p0.hasMore, true);
-  assert.equal(p0.page, 0);
-  assert.equal(p0.total, 3);
-  // Pagina 0 gaat via het pad (verse resultaten), zonder currentPage.
-  assert.match(fetchMock.calls[0].url, /\/search\/mascara$/);
-  const p2 = await stores.searchProducts('ici', 'mascara', 2);
-  assert.equal(p2.products[0].code, 'P2');
-  assert.equal(p2.hasMore, false);
-  assert.match(fetchMock.calls[1].url, /currentPage=2/);
+  const r = await stores.searchProducts('nl', 'tandpasta');
+  assert.equal(r.products.length, 100);
+  assert.equal(r.total, 236);
+  assert.equal(r.nextStart, 100);
+  assert.equal(r.hasMore, true);
+  assert.equal(fetchMock.calls.length, 5, '5 pagina\'s van 20');
+  // Pagina 0 via het kale pad, daarna currentPage=1..4.
+  assert.match(fetchMock.calls[0].url, /\/search\/tandpasta$/);
+  assert.match(fetchMock.calls[4].url, /currentPage=4$/);
+  assert.equal(new Set(r.products.map(p => p.code)).size, 100, 'geen dubbelen');
 });
 
-test('Kruidvat: geen paginering (edge-cache negeert currentPage), wel het totaal', async () => {
+test('"Meer laden" gaat verder vanaf nextStart, ook midden in een pagina', async () => {
+  // Limiet van 50 bij pagina's van 20: de eerste reeks eindigt halverwege pagina 2.
+  stores.net.fetch = makeFetch([[/kruidvat/, pagedSearch('K', 130, 20)]]);
+  const r1 = await stores.searchProducts('nl', 'x', 0, 50);
+  assert.equal(r1.products.length, 50);
+  assert.equal(r1.nextStart, 50);
+  assert.equal(r1.products[49].code, 'K49');
+  const r2 = await stores.searchProducts('nl', 'x', r1.nextStart, 100);
+  assert.equal(r2.products.length, 80);
+  assert.equal(r2.products[0].code, 'K50', 'sluit naadloos aan');
+  assert.equal(r2.hasMore, false);
+});
+
+test('ICI: zoekt via de OCC-API met pageSize 100 en zet afbeeldingen uit de array om', async () => {
+  const fetchMock = makeFetch([[/api\.iciparisxl\.nl/, (url) => {
+    const page = Number(new URL(url).searchParams.get('currentPage'));
+    const items = Array.from({ length: page === 0 ? 100 : 36 }, (_, i) => kvProduct({
+      code: `BP_${page * 100 + i}`, purchasable: undefined,
+      images: [{ imageType: 'PRIMARY', format: 'thumbnail', url: '/medias/t.jpg' }, { imageType: 'GALLERY', format: 'zoom', url: '/medias/z.jpg' }]
+    }));
+    return mockResponse(apiSearch(items, { currentPage: page, pageSize: 100, totalPages: 2, totalResults: 136 }));
+  }]]);
+  stores.net.fetch = fetchMock;
+  const r = await stores.searchProducts('ici', 'mascara');
+  assert.equal(r.products.length, 100);
+  assert.equal(fetchMock.calls.length, 1, 'één API-verzoek voor 100 resultaten');
+  const u = new URL(fetchMock.calls[0].url);
+  assert.equal(u.pathname, '/api/v2/icinl3/products/search');
+  assert.equal(u.searchParams.get('query'), 'mascara');
+  assert.equal(u.searchParams.get('pageSize'), '100');
+  assert.equal(u.searchParams.get('fields'), 'PLP');
+  assert.equal(fetchMock.calls[0].options.headers.Origin, 'https://www.iciparisxl.nl');
+  assert.equal(r.products[0].image, 'https://www.iciparisxl.nl/medias/t.jpg');
+  assert.equal(r.hasMore, true);
+  const r2 = await stores.searchProducts('ici', 'mascara', r.nextStart);
+  assert.equal(r2.products.length, 36);
+  assert.equal(r2.products[0].code, 'BP_100');
+  assert.equal(r2.hasMore, false);
+});
+
+test('prijzen worden altijd met een komma opgemaakt', async () => {
+  stores.net.fetch = makeFetch([[/kruidvat\.be/, () => mockResponse(spartacusHtml([kvProduct({ price: { value: 1.99, formattedValue: '€ 1.99', oldValue: 2.49, formattedOldValue: '€ 2.49' } })]))]]);
+  const { products } = await stores.searchProducts('be', 'x');
+  assert.equal(products[0].priceFormatted, '€ 1,99');
+  assert.equal(products[0].oldPriceFormatted, '€ 2,49');
+});
+
+test('minder dan 100 resultaten: alles in één keer, geen "meer"', async () => {
+  const fetchMock = makeFetch([[/kruidvat/, pagedSearch('K', 13, 20)]]);
+  stores.net.fetch = fetchMock;
+  const r = await stores.searchProducts('nl', 'x');
+  assert.equal(r.products.length, 13);
+  assert.equal(r.hasMore, false);
+  assert.equal(fetchMock.calls.length, 1);
+});
+
+test('negeert de site de paginering weer, dan stopt het zoeken (geen 5x dezelfde pagina)', async () => {
   const fetchMock = makeFetch([[/kruidvat/, () =>
-    mockResponse(spartacusHtml([kvProduct()], { currentPage: 0, pageSize: 20, totalPages: 30, totalResults: 585 }))]]);
+    mockResponse(spartacusHtml(Array.from({ length: 20 }, (_, i) => kvProduct({ code: `S${i}` })), { currentPage: 0, pageSize: 20, totalPages: 12, totalResults: 236 }))]]);
   stores.net.fetch = fetchMock;
-  const p0 = await stores.searchProducts('nl', 'shampoo', 0);
-  assert.equal(p0.hasMore, false);
-  assert.equal(p0.total, 585);
-  // Ook een expliciete pagina-aanvraag blijft bij het pad zonder currentPage.
-  await stores.searchProducts('nl', 'shampoo', 1);
-  assert.doesNotMatch(fetchMock.calls[1].url, /currentPage/);
-});
-
-test('Trekpleister: pagina 0 via text=, volgende pagina via q=…&page=N', async () => {
-  const fetchMock = makeFetch([[/trekpleister\.nl\/search/, (url) => {
-    const page = /[?&]page=(\d+)/.test(url) ? Number(RegExp.$1) : 0;
-    return mockResponse(legacyHtml([legacyTile({ code: `T${page}`, name: 'x', total: 3 })]));
-  }]]);
-  stores.net.fetch = fetchMock;
-  const p0 = await stores.searchProducts('tp', 'shampoo', 0);
-  assert.match(fetchMock.calls[0].url, /\?text=shampoo$/);
-  assert.equal(p0.hasMore, true);
-  const p2 = await stores.searchProducts('tp', 'shampoo', 2);
-  assert.match(fetchMock.calls[1].url, /q=shampoo%3Arelevance&page=2/);
-  assert.equal(p2.products[0].code, 'T2');
-  assert.equal(p2.hasMore, false);
+  const r = await stores.searchProducts('nl', 'x');
+  assert.equal(r.products.length, 20);
+  assert.equal(r.hasMore, false);
+  assert.equal(fetchMock.calls.length, 2, 'na één herhaalde pagina stoppen');
 });
 
 test('checkProduct vindt exact de gevraagde code', async () => {
@@ -133,27 +182,66 @@ test('checkProduct vindt exact de gevraagde code', async () => {
   assert.equal(await stores.checkProduct('nl', '999'), null);
 });
 
-test('Trekpleister: tegels, purchasable-attribuut en actietekst via PromotionBox', async () => {
-  const html = legacyHtml([
-    legacyTile({ code: '5733309', name: 'Finish', inStock: 'inStock', purchasable: false }),
-    legacyTile({ code: '6558613', name: 'Biodermal', purchasable: true, promoId: '9001', price: '2.99', oldPrice: '3.99' })
+// Trekpleister-productpagina met de actietekst in topPromotion.
+function tpPdpHtml(code, topPromotion) {
+  const state = { 'cx-state': { product: { details: { entities: { [code]: { list: { value: { code, name: 'x', topPromotion } } } } } } } };
+  const json = JSON.stringify(state).replace(/&/g, '&a;').replace(/"/g, '&q;');
+  return `<html><script id="spartacus-app-state" type="application/json">${json}</script></html>`;
+}
+
+test('Trekpleister: actietekst van de productpagina, één ophaling per actie, eigen prijsopmaak', async () => {
+  const promo = (code) => ({ badge: { image: { url: '/medias/x' } }, code, proGroupId: '1', reward: {}, shop4Nop: false });
+  const html = spartacusHtml([
+    kvProduct({ code: '5715809', url: '/sensodyne/p/5715809', price: { value: 27.99, formattedValue: '€ 27.99' }, topPromotion: promo(8004467) }),
+    kvProduct({ code: '5715690', url: '/sensodyne-2/p/5715690', price: { value: 21.49, formattedValue: '€ 21.49' }, topPromotion: promo(8004467) }),
+    kvProduct({ code: '1216636', url: '/prodent/p/1216636', price: { value: 2.75, formattedValue: '€ 2.75' }, topPromotion: promo(8005638) }),
+    kvProduct({ code: '1000000', url: '/zonder/p/1000000', topPromotion: { badge: { image: {} }, reward: {}, shop4Nop: false } })
   ]);
-  stores.net.fetch = makeFetch([
-    ['PromotionBoxComponentController', () => mockResponse('<div class="promotion-box"><span class="promotion-box__information-text">2e halve prijs</span></div>')],
-    [/trekpleister\.nl\/search/, () => mockResponse(html)]
+  const fetchMock = makeFetch([
+    ['/sensodyne/p/5715809', () => mockResponse(tpPdpHtml('5715809', { code: 8004467, name: 'Gratis verzenden Sensodyne multipak', promoCode: '5364002-8004467', endDate: '2026-12-13T23:59:59+0100' }))],
+    ['/prodent/p/1216636', () => mockResponse(tpPdpHtml('1216636', { code: 8005638, name: '2e halve prijs', promoCode: '550380-8005638', endDate: '2026-11-30T23:59:59+0100' }))],
+    [/trekpleister\.nl\/search\//, () => mockResponse(html)]
   ]);
-  const r = await stores.searchProducts('tp', 'x');
-  assert.equal(r.total, 452);
-  assert.equal(r.hasMore, true);
-  const [finish, bio] = r.products;
-  assert.equal(finish.inStock, false, 'magazijn inStock maar niet purchasable');
-  assert.equal(finish.promo, null);
-  assert.equal(bio.inStock, true);
-  assert.equal(bio.promo.headline, '2e halve prijs');
-  assert.equal(bio.promoCategory, '2e-halve-prijs');
-  assert.equal(bio.priceFormatted, '€ 2,99');
-  assert.equal(bio.oldPriceFormatted, '€ 3,99');
-  assert.equal(bio.url, 'https://www.trekpleister.nl/p/6558613');
+  stores.net.fetch = fetchMock;
+  const r = await stores.searchProducts('tp', 'tandpasta');
+  const [senso1, senso2, prodent, zonder] = r.products;
+  assert.equal(fetchMock.calls.filter(c => c.url.includes('/p/')).length, 2, 'één productpagina per unieke actie');
+  assert.equal(senso1.promo, null, '"Gratis verzenden" telt niet als aanbieding');
+  assert.equal(senso2.promo, null, 'zelfde actie, zonder eigen ophaling');
+  assert.equal(prodent.promo.headline, '2e halve prijs');
+  assert.equal(prodent.promo.category, '2e-halve-prijs');
+  assert.equal(prodent.promo.promoCode, '550380-8005638');
+  assert.equal(prodent.promo.endDate, '2026-11-30T23:59:59+0100');
+  assert.equal(prodent.promo.needsText, undefined);
+  assert.equal(zonder.promo, null, 'geen actie-ID: geen aanbieding');
+  assert.equal(senso1.priceFormatted, '€ 27,99', 'komma i.p.v. punt');
+  assert.equal(senso1.url, 'https://www.trekpleister.nl/sensodyne/p/5715809');
+});
+
+test('Trekpleister: mislukte productpagina laat het label "Aanbieding" staan', async () => {
+  const html = spartacusHtml([kvProduct({ code: '1', url: '/a/p/1', topPromotion: { code: 9, badge: {}, reward: {} } })]);
+  stores.net.fetch = makeFetch([['/a/p/1', () => mockResponse('', { ok: false, status: 500 })], [/trekpleister\.nl\/search\//, () => mockResponse(html)]]);
+  const p = await stores.checkProduct('tp', '1');
+  assert.equal(p.promo.headline, 'Aanbieding');
+  assert.equal(p.promoCategory, 'overig');
+  assert.equal(p.promo.promoCode, '9');
+});
+
+test('Chrome-versie wordt uit de datum berekend en is te overschrijven', () => {
+  assert.equal(stores.currentChromeMajor(Date.UTC(2025, 8, 2)), 140);
+  assert.equal(stores.currentChromeMajor(Date.UTC(2026, 10, 9)), 154);
+  assert.equal(stores.currentChromeMajor(Date.UTC(2024, 0, 1)), 140, 'nooit lager dan de basis');
+  process.env.CHROME_VERSION = '160';
+  assert.equal(stores.currentChromeMajor(), 160);
+  delete process.env.CHROME_VERSION;
+  assert.match(stores.BROWSER_HEADERS['User-Agent'], new RegExp(`Chrome/${stores.CHROME_MAJOR}\\.0`));
+  assert.match(stores.BROWSER_HEADERS['sec-ch-ua'], new RegExp(`v="${stores.CHROME_MAJOR}"`));
+});
+
+test('classifyPromo: "gratis verzenden" en "gratis verzending" zijn geen aanbieding', () => {
+  assert.equal(stores.classifyPromo('Gratis verzenden Sensodyne multipak'), 'verzending');
+  assert.equal(stores.classifyPromo('Gratis verzending vanaf 20 euro'), 'verzending');
+  assert.equal(stores.classifyPromo('3 voor 10.00'), 'overig');
 });
 
 test('HTTP-fout bij zoeken geeft een duidelijke fout', async () => {
