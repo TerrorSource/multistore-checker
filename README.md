@@ -25,8 +25,9 @@ stellen:
 - **Zoeken** (hoofdpagina): producten zoeken op naam of productcode, per
   winkel (Kruidvat NL/BE, Trekpleister, ICI PARIS XL), met statusbalk en een
   filter om producten die niet op voorraad zijn ook te tonen (standaard
-  verborgen). Per zoekopdracht tot 100 resultaten, met "Meer laden" voor de
-  volgende 100. Het laatste zoekresultaat (incl. filters) blijft staan als je
+  verborgen) en een prijsfilter (van – tot). Per zoekopdracht tot 100
+  resultaten, met "Meer laden" voor de volgende 100; boven de resultaten staat
+  hoeveel er gevonden, geladen en na de filters getoond zijn. Het laatste zoekresultaat (incl. filters) blijft staan als je
   naar een andere pagina gaat en terugkomt (bewaard per browsertabblad)
 - **Actie-categorieën**: elke aanbieding wordt ingedeeld in een categorie
   (1+1 / X+Y gratis, 2e halve prijs, % korting, afgeprijsd, overig) waarop je

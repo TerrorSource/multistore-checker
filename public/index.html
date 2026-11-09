@@ -63,6 +63,15 @@
       <div class="chip-row" id="categoryChips">
         <span class="chip-label">Actie:</span>
       </div>
+      <div class="filter-row price-row">
+        <span class="chip-label">Prijs:</span>
+        <span class="price-field"><label for="priceMin">van €</label>
+        <input type="text" inputmode="decimal" id="priceMin" placeholder="min" autocomplete="off"></span>
+        <span class="price-field"><label for="priceMax">tot €</label>
+        <input type="text" inputmode="decimal" id="priceMax" placeholder="max" autocomplete="off"></span>
+        <button type="button" class="btn btn-small btn-secondary" id="btnPriceReset" hidden>Wissen</button>
+      </div>
+      <div class="result-summary" id="resultSummary" hidden></div>
       <div class="product-list" id="searchResults"></div>
     </div>
 
@@ -86,7 +95,9 @@
         sessionStorage.setItem(SEARCH_KEY, JSON.stringify({
           ...lastSearch,
           categories: [...activeCategories],
-          showOutOfStock: document.getElementById('showOutOfStock').checked
+          showOutOfStock: document.getElementById('showOutOfStock').checked,
+          priceMin: document.getElementById('priceMin').value,
+          priceMax: document.getElementById('priceMax').value
         }));
       } catch { /* bewaren is een gemak, geen vereiste */ }
     }
@@ -102,6 +113,8 @@
       const sel = document.getElementById('searchSite');
       if ([...sel.options].some(o => o.value === lastSearch.site)) sel.value = lastSearch.site;
       document.getElementById('showOutOfStock').checked = Boolean(st.showOutOfStock);
+      document.getElementById('priceMin').value = st.priceMin || '';
+      document.getElementById('priceMax').value = st.priceMax || '';
       (st.categories || []).forEach(c => { if (PROMO_CATEGORIES[c]) activeCategories.add(c); });
     }
 
@@ -135,13 +148,35 @@
       }
     }
 
+    // Prijsgrens uit een invoerveld: komma of punt als decimaalteken, leeg =
+    // geen grens. Een ongeldige waarde markeert het veld en telt niet mee.
+    function readPrice(id) {
+      const el = document.getElementById(id);
+      const raw = el.value.trim().replace(/^€\s*/, '').replace(',', '.');
+      if (raw === '') { el.classList.remove('invalid'); return null; }
+      const v = Number(raw);
+      const ok = Number.isFinite(v) && v >= 0;
+      el.classList.toggle('invalid', !ok);
+      return ok ? v : null;
+    }
+    function priceBounds() {
+      let min = readPrice('priceMin');
+      let max = readPrice('priceMax');
+      if (min != null && max != null && min > max) [min, max] = [max, min];
+      return { min, max, active: min != null || max != null };
+    }
+
     function isWatched(site, code) {
       return watchlistItems.some(i => i.site === site && i.code === code);
     }
 
     function visibleProducts() {
       const showOOS = document.getElementById('showOutOfStock').checked;
+      const { min, max } = priceBounds();
       return lastSearch.products.filter(p => {
+        // Prijsfilter: producten zonder bekende prijs vallen buiten elk bereik.
+        if (min != null && (p.price == null || p.price < min)) return false;
+        if (max != null && (p.price == null || p.price > max)) return false;
         // inStock: true = op voorraad, false = niet, null = onbekend.
         // Onbekend tonen we altijd; 'niet op voorraad' alleen met het vinkje aan.
         if (!showOOS && p.inStock === false) return false;
@@ -151,11 +186,38 @@
       });
     }
 
+    // Regel boven de resultaten: hoeveel de winkel er vond, hoeveel er geladen
+    // zijn en hoeveel er na de filters overblijven.
+    function renderSummary(visibleCount) {
+      const el = document.getElementById('resultSummary');
+      const { term, products, total } = lastSearch;
+      document.getElementById('btnPriceReset').hidden = !priceBounds().active;
+      if (!term) { el.hidden = true; return; }
+      el.hidden = false;
+      const n = (x) => x.toLocaleString('nl-NL');
+      if (products.length === 0) {
+        el.innerHTML = `Geen resultaten gevonden voor <b>${esc(term)}</b>.`;
+        return;
+      }
+      const found = Math.max(total || 0, products.length);
+      const parts = [`<b>${n(found)}</b> ${found === 1 ? 'resultaat' : 'resultaten'} gevonden voor <b>${esc(term)}</b>`];
+      if (products.length < found) parts.push(`${n(products.length)} geladen`);
+      if (visibleCount !== products.length) parts.push(`<b>${n(visibleCount)}</b> getoond na filters`);
+      let html = parts.join(' · ');
+      // Filters werken op de geladen producten; met meer resultaten bij de
+      // winkel kan "Meer laden" nog treffers opleveren.
+      if (visibleCount !== products.length && lastSearch.hasMore) {
+        html += '<span class="summary-hint">De filters gelden voor de geladen resultaten; laad meer voor de rest.</span>';
+      }
+      el.innerHTML = html;
+    }
+
     function renderSearchResults() {
       const c = document.getElementById('searchResults');
       const { site } = lastSearch;
       const products = visibleProducts();
       const hidden = lastSearch.products.length - products.length;
+      renderSummary(products.length);
 
       if (lastSearch.products.length === 0) {
         c.innerHTML = '';
@@ -187,16 +249,12 @@
       });
 
       if (products.length === 0) {
-        rows.push(`<div class="empty-note">Alle ${hidden} gevonden producten zijn verborgen door de filters (voorraad/actie). Pas de filters aan om ze te tonen.</div>`);
-      } else if (hidden > 0) {
-        rows.push(`<div class="empty-note">${hidden} product${hidden === 1 ? '' : 'en'} verborgen door de filters.</div>`);
+        rows.push(`<div class="empty-note">Alle ${hidden} geladen producten vallen buiten de filters (voorraad/actie/prijs). Pas de filters aan om ze te tonen.</div>`);
       }
       // Volgende pagina ophalen zolang de winkel meer resultaten heeft.
       const shown = lastSearch.products.length;
       if (lastSearch.hasMore) {
         rows.push(`<div class="btn-row more-row"><button class="btn btn-secondary" id="btnMore">Meer laden (${shown} van ${lastSearch.total})</button></div>`);
-      } else if (lastSearch.total > shown) {
-        rows.push(`<div class="empty-note">${shown} van ${lastSearch.total} resultaten geladen.</div>`);
       }
       c.innerHTML = rows.join('');
 
@@ -335,6 +393,15 @@
       if (e.key === 'Enter') doSearch();
     });
     document.getElementById('showOutOfStock').addEventListener('change', () => { renderSearchResults(); saveSearchState(); });
+    for (const id of ['priceMin', 'priceMax']) {
+      document.getElementById(id).addEventListener('input', () => { renderSearchResults(); saveSearchState(); });
+    }
+    document.getElementById('btnPriceReset').addEventListener('click', () => {
+      document.getElementById('priceMin').value = '';
+      document.getElementById('priceMax').value = '';
+      renderSearchResults();
+      saveSearchState();
+    });
 
     restoreSearchState();
     renderCategoryChips();

@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.10.0] — 2026-11-09
+
+### Toegevoegd
+- **Aantal resultaten boven de zoekresultaten**, bv. "236 resultaten gevonden
+  voor tandpasta · 100 geladen · 27 getoond na filters". Bij geen treffers:
+  "Geen resultaten gevonden voor …".
+- **Prijsfilter (van – tot)** naast de bestaande voorraad- en actiefilters.
+  Komma of punt als decimaalteken; één grens invullen mag; omgedraaide
+  grenzen worden goed gezet; een ongeldige waarde krijgt een rode rand en
+  telt niet mee. Producten zonder bekende prijs vallen buiten een ingesteld
+  bereik. "Wissen" zet het filter uit. Het filter werkt op de geladen
+  resultaten (met "Meer laden" komen er meer bij) en wordt, net als de
+  andere filters, bewaard bij het wisselen van pagina.
+
 ## [2.9.0] — 2026-11-09
 
 ### Opgelost — alle winkels werden geblokkeerd
