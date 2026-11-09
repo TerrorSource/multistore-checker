@@ -31,7 +31,8 @@ const siteConfigs = {
     displayName: 'Kruidvat NL',
     domain: 'https://www.kruidvat.nl',
     searchBase: 'https://www.kruidvat.nl/search/',
-    pageSize: 20
+    pageSize: 20,
+    priceFacet: 'salePriceRange'
   },
   be: {
     key: 'be',
@@ -39,7 +40,8 @@ const siteConfigs = {
     domain: 'https://www.kruidvat.be',
     // BE heeft een /nl/ locale-prefix (anders volgt een 301-redirect).
     searchBase: 'https://www.kruidvat.be/nl/search/',
-    pageSize: 20
+    pageSize: 20,
+    priceFacet: 'salePriceRange'
   },
   // Trekpleister: topPromotion bevat in de zoekresultaten alleen een actie-ID
   // en een plaatje; de actietekst (topPromotion.name) staat alleen op de
@@ -50,6 +52,7 @@ const siteConfigs = {
     domain: 'https://www.trekpleister.nl',
     searchBase: 'https://www.trekpleister.nl/search/',
     pageSize: 20,
+    priceFacet: 'salePriceRange',
     promoTextFromPdp: true
   },
   // ICI PARIS XL wijkt op een paar punten af: productcodes hebben een
@@ -66,6 +69,8 @@ const siteConfigs = {
     domain: 'https://www.iciparisxl.nl',
     searchBase: 'https://www.iciparisxl.nl/search/',
     pageSize: 100,
+    // ICI's prijsfacet heet 'price' (interval op de actuele prijs).
+    priceFacet: 'price',
     api: { base: 'https://api.iciparisxl.nl/api/v2/icinl3', lang: 'nl_NL' }
   }
 };
@@ -346,6 +351,40 @@ function mapSpartacusProduct(p, site) {
   };
 }
 
+// Sorteringen en prijsbereik gaan als Spartacus-query naar de winkel zelf,
+// zodat "X gevonden" en de paginering kloppen voor het hele resultaat (niet
+// alleen voor de geladen producten). Vorm: <term>:<sort>:<facet>:<min> TO <max>
+// (getest 2026-11 op alle vier de winkels). Zonder sortering en prijsbereik
+// blijft het de kale zoekterm, exact zoals voorheen.
+const SORTS = ['relevance', 'price-asc', 'price-desc'];
+const SORT_CODE = { 'relevance': 'score', 'price-asc': 'price-asc', 'price-desc': 'price-desc' };
+const PRICE_MAX_OPEN = 100000;
+
+// Normaliseert de zoekopties: onbekende sortering -> relevance, negatieve of
+// ongeldige prijzen -> geen grens, omgedraaide grenzen worden gewisseld.
+function normalizeOptions(opts = {}) {
+  const sort = SORTS.includes(opts.sort) ? opts.sort : 'relevance';
+  const num = v => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) || Number(v) < 0) ? null : Number(v);
+  let min = num(opts.priceMin);
+  let max = num(opts.priceMax);
+  if (min != null && max != null && min > max) [min, max] = [max, min];
+  return { sort, priceMin: min, priceMax: max };
+}
+
+function priceText(v) {
+  return String(Math.round(v * 100) / 100);
+}
+
+function searchQuery(site, term, opts) {
+  const t = String(term).trim();
+  const { sort, priceMin, priceMax } = opts;
+  const hasPrice = priceMin != null || priceMax != null;
+  if (sort === 'relevance' && !hasPrice) return t;
+  let q = `${t}:${SORT_CODE[sort]}`;
+  if (hasPrice) q += `:${site.priceFacet}:${priceText(priceMin != null ? priceMin : 0)} TO ${priceText(priceMax != null ? priceMax : PRICE_MAX_OPEN)}`;
+  return q;
+}
+
 const API_HEADERS = {
   ...BROWSER_HEADERS,
   'Accept': 'application/json, text/plain, */*',
@@ -355,9 +394,9 @@ const API_HEADERS = {
 };
 
 // Eén pagina via de OCC-API (ICI).
-async function fetchSearchPageApi(site, term, page) {
+async function fetchSearchPageApi(site, term, page, opts) {
   const q = new URLSearchParams({
-    fields: 'PLP', query: String(term).trim(), pageSize: String(site.pageSize),
+    fields: 'PLP', query: searchQuery(site, term, opts), pageSize: String(site.pageSize),
     currentPage: String(page), lang: site.api.lang, curr: 'EUR'
   });
   const res = await net.fetch(`${site.api.base}/products/search?${q}`, {
@@ -366,8 +405,14 @@ async function fetchSearchPageApi(site, term, page) {
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
   let data;
   try { data = await res.json(); } catch { throw new Error(`${site.displayName}: onleesbaar API-antwoord`); }
-  const products = Array.isArray(data.products) ? data.products : [];
-  const pag = data.pagination || {};
+  // Een geldig antwoord heeft altijd products[] en pagination, ook bij 0
+  // treffers. Ontbreekt dat, dan is de API veranderd: dat is een storing, geen
+  // "0 resultaten".
+  if (!data || !Array.isArray(data.products) || !data.pagination) {
+    throw new Error(`${site.displayName}: onverwacht API-antwoord (geen zoekresultaten; API gewijzigd?)`);
+  }
+  const products = data.products;
+  const pag = data.pagination;
   return {
     products: products.map(p => mapSpartacusProduct(p, site)),
     total: pag.totalResults || products.length,
@@ -379,9 +424,15 @@ async function fetchSearchPageApi(site, term, page) {
 
 // Eén zoekpagina ophalen. Pagina 0 altijd zonder parameter (verse
 // resultaten), volgende pagina's met ?currentPage=N.
-async function fetchSearchPage(site, term, page = 0) {
-  if (site.api) return fetchSearchPageApi(site, term, page);
-  let url = site.searchBase + encodeURIComponent(String(term).trim());
+async function fetchSearchPage(site, term, page = 0, options = {}) {
+  const opts = normalizeOptions(options);
+  if (site.api) return fetchSearchPageApi(site, term, page, opts);
+  // De term wordt ge-encodeerd; de dubbele punten en het bereik ("2.5 TO 5")
+  // van sortering/prijsfilter staan letterlijk in het pad (spatie als %20).
+  const t = encodeURIComponent(String(term).trim());
+  const q = searchQuery(site, term, opts);
+  const suffix = q === String(term).trim() ? '' : q.slice(String(term).trim().length).replace(/ /g, '%20');
+  let url = site.searchBase + t + suffix;
   if (page > 0) url += `?currentPage=${page}`;
 
   const res = await net.fetch(url, { headers: BROWSER_HEADERS, redirect: 'follow' });
@@ -391,8 +442,12 @@ async function fetchSearchPage(site, term, page = 0) {
   const state = extractSpartacusState(html);
   if (!state) throw new Error(`${site.displayName}: spartacus-app-state niet gevonden (sitestructuur gewijzigd?)`);
 
+  // Ook een zoekopdracht zonder treffers heeft een zoekmodel (met 0 of een paar
+  // "bedoelde je"-producten). Ontbreekt het model helemaal, dan is de site
+  // omgebouwd (zo ging het bij ICI in 2026): melden als storing in plaats van
+  // stilzwijgend "0 resultaten".
   const model = findSearchModel(state);
-  if (!model) return { products: [], total: 0, page, pageSize: site.pageSize, totalPages: 0 };
+  if (!model) throw new Error(`${site.displayName}: geen zoekresultaten in de pagina (sitestructuur gewijzigd?)`);
 
   const pag = model.pagination || {};
   return {
@@ -479,8 +534,9 @@ function siteOf(siteKey) {
 // zoveel pagina's als nodig voor `limit` producten. nextStart is het
 // startpunt voor "Meer laden". Stopt vroegtijdig als een pagina alleen al
 // bekende producten bevat (dan negeert de edge-cache de paginering weer).
-async function searchProducts(siteKey, term, start = 0, limit = 100) {
+async function searchProducts(siteKey, term, start = 0, limit = 100, options = {}) {
   const site = siteOf(siteKey);
+  const opts = normalizeOptions(options);
   let pageSize = site.pageSize || 20;
   let page = Math.floor(start / pageSize);
   let skip = start % pageSize;
@@ -492,7 +548,7 @@ async function searchProducts(siteKey, term, start = 0, limit = 100) {
 
   for (let n = 0; products.length < limit; n++) {
     if (n > 0) await delay(settings.pageDelayMs);
-    const r = await fetchSearchPage(site, term, page);
+    const r = await fetchSearchPage(site, term, page, opts);
     total = r.total;
     pageSize = r.pageSize || pageSize;
 
@@ -521,7 +577,10 @@ async function searchProducts(siteKey, term, start = 0, limit = 100) {
     total,
     start,
     nextStart,
-    hasMore: !exhausted && nextStart < total
+    hasMore: !exhausted && nextStart < total,
+    sort: opts.sort,
+    priceMin: opts.priceMin,
+    priceMax: opts.priceMax
   };
 }
 
@@ -540,7 +599,9 @@ module.exports = {
   searchProducts,
   checkProduct,
   PROMO_CATEGORIES,
+  SORTS,
   classifyPromo,
+  normalizeOptions,
   // Herbruikbaar voor andere scrapers (o.a. gratis-producten-checker) en tests:
   BROWSER_HEADERS,
   CHROME_MAJOR,

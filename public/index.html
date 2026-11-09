@@ -43,6 +43,7 @@
         <div class="value" id="statusLastCheck" style="font-size:14px">-</div>
       </div>
     </div>
+    <div class="site-health" id="siteHealth" hidden></div>
 
     <div class="card">
       <h2>Product zoeken</h2>
@@ -70,6 +71,12 @@
         <span class="price-field"><label for="priceMax">tot €</label>
         <input type="text" inputmode="decimal" id="priceMax" placeholder="max" autocomplete="off"></span>
         <button type="button" class="btn btn-small btn-secondary" id="btnPriceReset" hidden>Wissen</button>
+        <span class="price-field"><label for="searchSort">Sorteren:</label>
+        <select id="searchSort">
+          <option value="relevance">Relevantie</option>
+          <option value="price-asc">Prijs oplopend</option>
+          <option value="price-desc">Prijs aflopend</option>
+        </select></span>
       </div>
       <div class="result-summary" id="resultSummary" hidden></div>
       <div class="product-list" id="searchResults"></div>
@@ -83,7 +90,7 @@
   <script src="/app.js"></script>
   <script>
     let watchlistItems = [];
-    let lastSearch = { site: 'nl', term: '', products: [], nextStart: 0, total: 0, hasMore: false };
+    let lastSearch = { site: 'nl', term: '', products: [], nextStart: 0, total: 0, hasMore: false, sort: 'relevance', priceMin: null, priceMax: null };
 
     // Het laatste zoekresultaat blijft bewaard in de sessie van dit tabblad,
     // zodat het er nog staat na een uitstapje naar "Gevolgde producten" of
@@ -96,8 +103,9 @@
           ...lastSearch,
           categories: [...activeCategories],
           showOutOfStock: document.getElementById('showOutOfStock').checked,
-          priceMin: document.getElementById('priceMin').value,
-          priceMax: document.getElementById('priceMax').value
+          priceMinInput: document.getElementById('priceMin').value,
+          priceMaxInput: document.getElementById('priceMax').value,
+          sortInput: document.getElementById('searchSort').value
         }));
       } catch { /* bewaren is een gemak, geen vereiste */ }
     }
@@ -107,14 +115,20 @@
       if (!st || !Array.isArray(st.products) || !st.term) return;
       lastSearch = {
         site: st.site || 'nl', term: st.term, products: st.products,
-        nextStart: st.nextStart || st.products.length, total: st.total || st.products.length, hasMore: Boolean(st.hasMore)
+        nextStart: st.nextStart || st.products.length, total: st.total || st.products.length, hasMore: Boolean(st.hasMore),
+        sort: st.sort || 'relevance',
+        // Sessies van 2.10.0 bewaarden hier de tekst uit de invoervelden.
+        priceMin: typeof st.priceMin === 'number' ? st.priceMin : null,
+        priceMax: typeof st.priceMax === 'number' ? st.priceMax : null
       };
       document.getElementById('searchInput').value = st.term;
       const sel = document.getElementById('searchSite');
       if ([...sel.options].some(o => o.value === lastSearch.site)) sel.value = lastSearch.site;
       document.getElementById('showOutOfStock').checked = Boolean(st.showOutOfStock);
-      document.getElementById('priceMin').value = st.priceMin || '';
-      document.getElementById('priceMax').value = st.priceMax || '';
+      document.getElementById('priceMin').value = st.priceMinInput || '';
+      document.getElementById('priceMax').value = st.priceMaxInput || '';
+      const sortSel = document.getElementById('searchSort');
+      if ([...sortSel.options].some(o => o.value === st.sortInput)) sortSel.value = st.sortInput;
       (st.categories || []).forEach(c => { if (PROMO_CATEGORIES[c]) activeCategories.add(c); });
     }
 
@@ -172,11 +186,8 @@
 
     function visibleProducts() {
       const showOOS = document.getElementById('showOutOfStock').checked;
-      const { min, max } = priceBounds();
       return lastSearch.products.filter(p => {
-        // Prijsfilter: producten zonder bekende prijs vallen buiten elk bereik.
-        if (min != null && (p.price == null || p.price < min)) return false;
-        if (max != null && (p.price == null || p.price > max)) return false;
+        // Prijs en sortering zijn al bij de winkel toegepast (zie doSearch).
         // inStock: true = op voorraad, false = niet, null = onbekend.
         // Onbekend tonen we altijd; 'niet op voorraad' alleen met het vinkje aan.
         if (!showOOS && p.inStock === false) return false;
@@ -196,18 +207,25 @@
       el.hidden = false;
       const n = (x) => x.toLocaleString('nl-NL');
       if (products.length === 0) {
-        el.innerHTML = `Geen resultaten gevonden voor <b>${esc(term)}</b>.`;
+        el.innerHTML = `Geen resultaten gevonden voor <b>${esc(term)}</b>${(lastSearch.priceMin != null || lastSearch.priceMax != null) ? ' binnen dit prijsbereik' : ''}.`;
         return;
       }
       const found = Math.max(total || 0, products.length);
-      const parts = [`<b>${n(found)}</b> ${found === 1 ? 'resultaat' : 'resultaten'} gevonden voor <b>${esc(term)}</b>`];
+      const eur = (v) => '€ ' + Number(v).toFixed(2).replace('.', ',');
+      let range = '';
+      if (lastSearch.priceMin != null && lastSearch.priceMax != null) range = ` tussen ${eur(lastSearch.priceMin)} en ${eur(lastSearch.priceMax)}`;
+      else if (lastSearch.priceMin != null) range = ` vanaf ${eur(lastSearch.priceMin)}`;
+      else if (lastSearch.priceMax != null) range = ` tot ${eur(lastSearch.priceMax)}`;
+      const parts = [`<b>${n(found)}</b> ${found === 1 ? 'resultaat' : 'resultaten'} gevonden voor <b>${esc(term)}</b>${range}`];
+      const SORT_LABEL = { 'price-asc': 'prijs oplopend', 'price-desc': 'prijs aflopend' };
+      if (SORT_LABEL[lastSearch.sort]) parts.push(`gesorteerd op ${SORT_LABEL[lastSearch.sort]}`);
       if (products.length < found) parts.push(`${n(products.length)} geladen`);
       if (visibleCount !== products.length) parts.push(`<b>${n(visibleCount)}</b> getoond na filters`);
       let html = parts.join(' · ');
-      // Filters werken op de geladen producten; met meer resultaten bij de
-      // winkel kan "Meer laden" nog treffers opleveren.
+      // Voorraad- en actiefilters werken op de geladen producten (prijs en
+      // sortering niet: die past de winkel al toe op het hele resultaat).
       if (visibleCount !== products.length && lastSearch.hasMore) {
-        html += '<span class="summary-hint">De filters gelden voor de geladen resultaten; laad meer voor de rest.</span>';
+        html += '<span class="summary-hint">Voorraad- en actiefilters gelden voor de geladen resultaten; laad meer voor de rest.</span>';
       }
       el.innerHTML = html;
     }
@@ -266,23 +284,44 @@
     }
 
     // Elk verzoek levert tot 100 resultaten vanaf 'start'.
-    async function fetchResults(site, term, start) {
-      const res = await fetch(`/api/search?site=${encodeURIComponent(site)}&q=${encodeURIComponent(term)}&start=${start}`);
+    async function fetchResults(site, term, start, opts) {
+      const q = new URLSearchParams({ site, q: term, start: String(start), sort: opts.sort || 'relevance' });
+      if (opts.priceMin != null) q.set('min', String(opts.priceMin));
+      if (opts.priceMax != null) q.set('max', String(opts.priceMax));
+      const res = await fetch('/api/search?' + q);
       return res.json();
     }
+
+    function currentOptions() {
+      const { min, max } = priceBounds();
+      return { sort: document.getElementById('searchSort').value, priceMin: min, priceMax: max };
+    }
+
+    // Elke zoekopdracht krijgt een volgnummer; een antwoord op een oudere
+    // opdracht (bv. terwijl je nog aan het typen was) wordt genegeerd.
+    let searchSeq = 0;
 
     async function doSearch() {
       const term = document.getElementById('searchInput').value.trim();
       const site = document.getElementById('searchSite').value;
       if (!term) return;
+      // Ongeldige prijsinvoer: niet zoeken, het veld is al rood gemarkeerd.
+      if (document.querySelector('.price-row input.invalid')) return;
+      const opts = currentOptions();
+      const mySeq = ++searchSeq;
       const btn = document.getElementById('btnSearch');
       btn.disabled = true;
       // Tot 100 resultaten = meerdere pagina's bij de winkel: dat duurt even.
       btn.textContent = 'Zoeken… (tot 100 resultaten)';
       try {
-        const data = await fetchResults(site, term, 0);
+        const data = await fetchResults(site, term, 0, opts);
+        if (mySeq !== searchSeq) return;
         if (data.success) {
-          lastSearch = { site, term, products: data.products, nextStart: data.nextStart || data.products.length, total: data.total || data.products.length, hasMore: Boolean(data.hasMore) };
+          lastSearch = {
+            site, term, products: data.products, nextStart: data.nextStart || data.products.length,
+            total: data.total || data.products.length, hasMore: Boolean(data.hasMore),
+            sort: data.sort || opts.sort, priceMin: data.priceMin ?? opts.priceMin, priceMax: data.priceMax ?? opts.priceMax
+          };
           renderSearchResults();
           saveSearchState();
           if (data.products.length === 0) showToast('Geen producten gevonden', 'info');
@@ -290,18 +329,32 @@
           showToast('Zoeken mislukt: ' + (data.error || 'onbekende fout'), 'error');
         }
       } catch (err) {
-        showToast('Zoeken mislukt: server niet bereikbaar', 'error');
+        if (mySeq === searchSeq) showToast('Zoeken mislukt: server niet bereikbaar', 'error');
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Zoeken';
+        if (mySeq === searchSeq) {
+          btn.disabled = false;
+          btn.textContent = 'Zoeken';
+        }
+        loadStatus();
       }
+    }
+
+    // Prijs of sortering gewijzigd: opnieuw zoeken (alleen als er al een
+    // zoekterm is). Bij typen in een prijsveld even wachten tot je klaar bent.
+    let refineTimer = null;
+    function refineSearch(delayMs) {
+      clearTimeout(refineTimer);
+      renderSummary(visibleProducts().length);
+      saveSearchState();
+      if (!document.getElementById('searchInput').value.trim()) return;
+      refineTimer = setTimeout(doSearch, delayMs);
     }
 
     async function loadMore() {
       const btn = document.getElementById('btnMore');
       if (btn) { btn.disabled = true; btn.textContent = 'Volgende 100 laden…'; }
       try {
-        const data = await fetchResults(lastSearch.site, lastSearch.term, lastSearch.nextStart);
+        const data = await fetchResults(lastSearch.site, lastSearch.term, lastSearch.nextStart, lastSearch);
         if (data.success) {
           // Dubbele codes (kan bij verschuivende sortering) overslaan.
           const seen = new Set(lastSearch.products.map(p => p.code));
@@ -356,6 +409,22 @@
       } catch { /* stil */ }
     }
 
+    // Per winkel: groen = laatste verzoek gelukt, rood = storing (met reden en
+    // sinds wanneer), grijs = nog niet geprobeerd sinds de start.
+    function renderSiteHealth(sites) {
+      const el = document.getElementById('siteHealth');
+      if (!sites) { el.hidden = true; return; }
+      const items = Object.values(sites).map(h => {
+        if (h.state === 'error') {
+          return `<span class="site-state error" title="${esc(h.lastError || '')}">● ${esc(h.name)}: storing sinds ${formatTime(h.lastErrorAt)}${h.lastOk ? ` (laatst gelukt ${formatTime(h.lastOk)})` : ''}</span>`;
+        }
+        if (h.state === 'ok') return `<span class="site-state ok">● ${esc(h.name)}: gelukt ${formatTime(h.lastOk)}</span>`;
+        return `<span class="site-state unknown">● ${esc(h.name)}: nog niet gecontroleerd</span>`;
+      });
+      el.innerHTML = '<span class="site-health-label">Winkels:</span> ' + items.join('');
+      el.hidden = false;
+    }
+
     let serverDown = false;
     async function loadStatus() {
       let s;
@@ -375,6 +444,7 @@
         showToast('Verbinding hersteld', 'success');
       }
       applyStatus(s);
+      renderSiteHealth(s.sites);
       const activeEl = document.getElementById('statusActive');
       activeEl.textContent = s.active ? 'Actief' : 'Inactief';
       activeEl.className = 'value ' + (s.active ? 'active' : 'inactive');
@@ -394,13 +464,14 @@
     });
     document.getElementById('showOutOfStock').addEventListener('change', () => { renderSearchResults(); saveSearchState(); });
     for (const id of ['priceMin', 'priceMax']) {
-      document.getElementById(id).addEventListener('input', () => { renderSearchResults(); saveSearchState(); });
+      document.getElementById(id).addEventListener('input', () => refineSearch(800));
+      document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') refineSearch(0); });
     }
+    document.getElementById('searchSort').addEventListener('change', () => refineSearch(0));
     document.getElementById('btnPriceReset').addEventListener('click', () => {
       document.getElementById('priceMin').value = '';
       document.getElementById('priceMax').value = '';
-      renderSearchResults();
-      saveSearchState();
+      refineSearch(0);
     });
 
     restoreSearchState();

@@ -178,7 +178,7 @@ async function runCheck(config, watchlist, isManual = false) {
   const targets = validTargets(config);
 
   if (watchlist.length === 0) {
-    return { success: true, checked: 0, deals: 0, newDeals: 0, errors: 0, outages: [], timestamp: new Date().toISOString() };
+    return { success: true, checked: 0, deals: 0, newDeals: 0, errors: 0, outages: [], sites: {}, timestamp: new Date().toISOString() };
   }
 
   const notified = loadNotified();
@@ -339,6 +339,12 @@ async function runCheck(config, watchlist, isManual = false) {
     newDeals: newDealCount,
     errors: errorCount,
     outages: [...outageSites],
+    // Per winkel: is er minstens één product gelukt? Voor de "laatst gelukt"-
+    // status op het dashboard.
+    sites: Object.fromEntries(Object.entries(perSite).map(([k, v]) => [k, {
+      ok: v.errors < v.total,
+      error: v.errors > 0 ? v.lastError : null
+    }])),
     timestamp: new Date().toISOString()
   };
 }

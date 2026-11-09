@@ -161,6 +161,19 @@ input:focus, select:focus { outline: none; border-color: var(--kv-red); box-shad
 .price-row input.invalid { border-color: var(--kv-red); background: #fff5f6; }
 .price-row .chip-label { font-size: 13px; color: var(--kv-muted); }
 .price-row .price-field { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.price-row select { padding: 7px 10px; font-size: 13px; }
+
+/* Status per winkel onder de statusbalk */
+.site-health {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
+  margin: -6px 0 16px; padding: 10px 14px; background: #fff; border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); font-size: 13px;
+}
+.site-health[hidden] { display: none; }
+.site-health-label { color: var(--kv-muted); }
+.site-state.ok { color: var(--kv-green); }
+.site-state.error { color: var(--kv-red); font-weight: 600; cursor: help; }
+.site-state.unknown { color: var(--kv-muted); }
 
 /* Samenvatting boven de zoekresultaten */
 .result-summary {

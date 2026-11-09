@@ -98,12 +98,37 @@ test('Trekpleister (Spartacus): eigen URL, zelfde beschikbaarheidslogica als Kru
   assert.match(sent[0].text, /Gratis T2<\/a> \(voorraad: niet bestelbaar \(geen prijs\)\)/);
 });
 
-test('storing: HTTP-fout geeft een fout-resultaat en geen "0 gevonden"-bericht', async () => {
+test('storing: één melding per winkel, geen "0 gevonden", herstel is stil', async () => {
+  const outFile = path.join(dataDir, 'gratis-outages.json');
+  if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
   stores.net.fetch = makeFetch([telegramRoute(sent), [/kruidvat/, () => mockResponse('', { ok: false, status: 403 })]]);
   const r = await gratis.runGratisCheck(config({ notifyEmpty: true }), false);
   assert.equal(r.success, true);
   assert.equal(r.results[0].error, true);
-  assert.equal(sent.length, 0);
+  assert.equal(r.results[0].errorMessage, 'HTTP 403');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Gratis-checker: Kruidvat NL is niet te controleren \(HTTP 403\)/);
+  assert.doesNotMatch(sent[0].text, /geen gratis producten/);
+
+  await gratis.runGratisCheck(config({ notifyEmpty: true }), false);
+  assert.equal(sent.length, 1, 'aanhoudende storing: geen tweede melding');
+
+  stores.net.fetch = makeFetch([telegramRoute(sent), [/kruidvat/, () => mockResponse(spartacusHtml([]))]]);
+  await gratis.runGratisCheck(config(), false);
+  assert.equal(sent.length, 1, 'herstel zonder melding (notifyEmpty uit)');
+  assert.deepEqual(JSON.parse(fs.readFileSync(outFile, 'utf8')), {});
+});
+
+test('gewijzigde site (geen zoekresultaten in de pagina) telt als storing, niet als "0 gevonden"', async () => {
+  const outFile = path.join(dataDir, 'gratis-outages.json');
+  if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
+  const kaal = '<html><script id="spartacus-app-state" type="application/json">{&q;facets&q;:[]}</script></html>';
+  stores.net.fetch = makeFetch([telegramRoute(sent), [/kruidvat/, () => mockResponse(kaal)]]);
+  const r = await gratis.runGratisCheck(config({ notifyEmpty: true }), true);
+  assert.equal(r.results[0].error, true);
+  assert.match(r.results[0].errorMessage, /sitestructuur gewijzigd/);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /niet te controleren/);
 });
 
 test('zonder Telegram-ontvangers wordt de check overgeslagen', async () => {

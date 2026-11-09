@@ -25,9 +25,11 @@ stellen:
 - **Zoeken** (hoofdpagina): producten zoeken op naam of productcode, per
   winkel (Kruidvat NL/BE, Trekpleister, ICI PARIS XL), met statusbalk en een
   filter om producten die niet op voorraad zijn ook te tonen (standaard
-  verborgen) en een prijsfilter (van – tot). Per zoekopdracht tot 100
+  verborgen), een prijsfilter (van – tot) en sorteren op relevantie of prijs.
+  Prijs en sortering past de winkel zelf toe, dus het aantal gevonden
+  resultaten klopt voor het hele bereik. Per zoekopdracht tot 100
   resultaten, met "Meer laden" voor de volgende 100; boven de resultaten staat
-  hoeveel er gevonden, geladen en na de filters getoond zijn. Het laatste zoekresultaat (incl. filters) blijft staan als je
+  hoeveel er gevonden, geladen en na de filters getoond zijn Het laatste zoekresultaat (incl. filters) blijft staan als je
   naar een andere pagina gaat en terugkomt (bewaard per browsertabblad)
 - **Actie-categorieën**: elke aanbieding wordt ingedeeld in een categorie
   (1+1 / X+Y gratis, 2e halve prijs, % korting, afgeprijsd, overig) waarop je
@@ -46,6 +48,9 @@ stellen:
   erbij of het écht te bestellen is: *op voorraad* (bestelbaar), *niet
   bestelbaar (geen prijs)* (de winkel weigert artikelen zonder prijs
   server-side, ook als er voorraad is) of *niet op voorraad*
+- **Status per winkel** op het dashboard: wanneer het laatste verzoek lukte,
+  of in rood sinds wanneer er een storing is. Zowel de watchlist als de
+  gratis-checker sturen één Telegram-melding per storing per winkel
 - **Scheduler**: automatisch checken op instelbaar interval, plus handmatige check
 - Alle data blijft bewaard in het `/data`-volume
 

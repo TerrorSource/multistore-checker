@@ -148,3 +148,31 @@ test('update-check: hoogste tag op GitHub bepaalt of er een update is', async ()
   await checkForUpdate(); // stil bij fouten
   assert.equal(updateInfo.available, false);
 });
+
+test('status toont per winkel of het laatste verzoek lukte', async () => {
+  stores.net.fetch = makeFetch([[/kruidvat\.nl/, () => mockResponse(spartacusHtml([kvProduct()]))]]);
+  let s = await get('/api/status');
+  assert.equal(s.sites.tp.state, 'unknown');
+  await get('/api/search?site=nl&q=test');
+  s = await get('/api/status');
+  assert.equal(s.sites.nl.state, 'ok');
+  assert.equal(s.sites.nl.name, 'Kruidvat NL');
+  assert.ok(s.sites.nl.lastOk);
+  stores.net.fetch = makeFetch([[/kruidvat\.nl/, () => mockResponse('', { ok: false, status: 403 })]]);
+  await get('/api/search?site=nl&q=test');
+  s = await get('/api/status');
+  assert.equal(s.sites.nl.state, 'error');
+  assert.match(s.sites.nl.lastError, /zoeken: Kruidvat NL: HTTP 403/);
+  assert.ok(s.sites.nl.lastOk, 'laatst gelukt blijft bewaard');
+});
+
+test('zoeken geeft sortering en prijsbereik door aan de winkel', async () => {
+  const fetchMock = makeFetch([[/kruidvat\.nl/, () => mockResponse(spartacusHtml([kvProduct()], { totalResults: 1 }))]]);
+  stores.net.fetch = fetchMock;
+  const r = await get('/api/search?site=nl&q=tandpasta&sort=price-asc&min=2,50&max=5');
+  assert.equal(r.success, true);
+  assert.equal(r.sort, 'price-asc');
+  assert.equal(r.priceMin, 2.5);
+  assert.equal(r.priceMax, 5);
+  assert.equal(fetchMock.calls[0].url, 'https://www.kruidvat.nl/search/tandpasta:price-asc:salePriceRange:2.5%20TO%205');
+});

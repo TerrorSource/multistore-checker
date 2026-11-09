@@ -244,6 +244,54 @@ test('classifyPromo: "gratis verzenden" en "gratis verzending" zijn geen aanbied
   assert.equal(stores.classifyPromo('3 voor 10.00'), 'overig');
 });
 
+test('pagina zonder zoekmodel is een fout (geen stille "0 resultaten")', async () => {
+  const kaal = '<html><script id="spartacus-app-state" type="application/json">{&q;facets&q;:[]}</script></html>';
+  stores.net.fetch = makeFetch([[/kruidvat/, () => mockResponse(kaal)]]);
+  await assert.rejects(stores.searchProducts('nl', 'x'), /sitestructuur gewijzigd/);
+  await assert.rejects(stores.checkProduct('nl', '123'), /sitestructuur gewijzigd/, 'ook de watchlist ziet het als fout');
+  // Een échte zoekopdracht zonder treffers heeft wél een model.
+  stores.net.fetch = makeFetch([[/kruidvat/, () => mockResponse(spartacusHtml([], { totalPages: 0, totalResults: 0 }))]]);
+  const leeg = await stores.searchProducts('nl', 'xqzvwplmk');
+  assert.equal(leeg.products.length, 0);
+  assert.equal(leeg.total, 0);
+});
+
+test('ICI: API-antwoord zonder products/pagination is een fout', async () => {
+  stores.net.fetch = makeFetch([[/api\.iciparisxl\.nl/, () => mockResponse({ errors: [{ type: 'UnknownResourceError' }] })]]);
+  await assert.rejects(stores.searchProducts('ici', 'x'), /API gewijzigd/);
+  stores.net.fetch = makeFetch([[/api\.iciparisxl\.nl/, () => mockResponse(apiSearch([]))]]);
+  assert.equal((await stores.searchProducts('ici', 'x')).products.length, 0);
+});
+
+test('sortering en prijsbereik gaan in het pad naar Kruidvat/Trekpleister', async () => {
+  const fetchMock = makeFetch([[/kruidvat|trekpleister/, () => mockResponse(spartacusHtml([kvProduct()], { totalResults: 1 }))]]);
+  stores.net.fetch = fetchMock;
+  await stores.searchProducts('nl', 'tandpasta', 0, 100, { sort: 'price-asc', priceMin: 2.5, priceMax: 5 });
+  assert.equal(fetchMock.calls[0].url, 'https://www.kruidvat.nl/search/tandpasta:price-asc:salePriceRange:2.5%20TO%205');
+  await stores.searchProducts('tp', 'dove shampoo', 0, 100, { sort: 'price-desc', priceMin: 10 });
+  assert.equal(fetchMock.calls[1].url, 'https://www.trekpleister.nl/search/dove%20shampoo:price-desc:salePriceRange:10%20TO%20100000');
+  await stores.searchProducts('be', 'x', 0, 100, { priceMax: 3 });
+  assert.equal(fetchMock.calls[2].url, 'https://www.kruidvat.be/nl/search/x:score:salePriceRange:0%20TO%203', 'relevantie = score');
+  await stores.searchProducts('nl', 'tandpasta', 0, 100, {});
+  assert.equal(fetchMock.calls[3].url, 'https://www.kruidvat.nl/search/tandpasta', 'zonder opties de kale zoekterm');
+});
+
+test('ICI: sortering en prijsbereik via het price-facet in de API-query', async () => {
+  const fetchMock = makeFetch([[/api\.iciparisxl\.nl/, () => mockResponse(apiSearch([]))]]);
+  stores.net.fetch = fetchMock;
+  const r = await stores.searchProducts('ici', 'mascara', 0, 100, { sort: 'price-asc', priceMin: 20, priceMax: 30 });
+  assert.equal(new URL(fetchMock.calls[0].url).searchParams.get('query'), 'mascara:price-asc:price:20 TO 30');
+  assert.equal(r.sort, 'price-asc');
+  assert.equal(r.priceMin, 20);
+  assert.equal(r.priceMax, 30);
+});
+
+test('zoekopties worden genormaliseerd', () => {
+  assert.deepEqual(stores.normalizeOptions({}), { sort: 'relevance', priceMin: null, priceMax: null });
+  assert.deepEqual(stores.normalizeOptions({ sort: 'hack', priceMin: '5', priceMax: '2.5' }), { sort: 'relevance', priceMin: 2.5, priceMax: 5 }, 'omgedraaid + onbekende sortering');
+  assert.deepEqual(stores.normalizeOptions({ priceMin: -1, priceMax: 'abc' }), { sort: 'relevance', priceMin: null, priceMax: null });
+});
+
 test('HTTP-fout bij zoeken geeft een duidelijke fout', async () => {
   stores.net.fetch = makeFetch([[/kruidvat/, () => mockResponse('', { ok: false, status: 403 })]]);
   await assert.rejects(stores.searchProducts('nl', 'x'), /HTTP 403/);

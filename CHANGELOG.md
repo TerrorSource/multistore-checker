@@ -1,5 +1,45 @@
 # Changelog
 
+## [2.11.0] — 2026-11-09
+
+### Stille storingen worden nu gemeld
+- **Een omgebouwde site telt als storing, niet als "0 resultaten".** Bevat
+  een pagina geen zoekresultaten-model (of de ICI-API geen products/
+  pagination), dan geeft de zoeker een duidelijke fout. Voorheen leverde dat
+  stilzwijgend 0 producten op; de watchlist zag elk product dan als
+  "niet gevonden" en stuurde na drie checks per product een misleidend
+  "mogelijk verdwenen"-bericht, en de gratis-checker meldde "geen gratis
+  producten gevonden". Nu volgt één storingsmelding per winkel. (Een echte
+  zoekopdracht zonder treffers heeft wél een model en blijft gewoon "0".)
+- **De gratis-checker stuurt een Telegram-melding bij een storing**, één per
+  winkel (`gratis-outages.json`); een volgende komt pas nadat de check daar
+  weer gelukt is. Herstel gebeurt stil. Voorheen stond een storing alleen in
+  het log, waardoor de Akamai-blokkade van november 2026 onopgemerkt bleef.
+- **Status per winkel op het dashboard**: "gelukt om …" of, in rood,
+  "storing sinds … (laatst gelukt …)", met de foutmelding bij aanwijzen.
+  Gevoed door alle verzoeken (watchlist, gratis-check, zoeken) en bewaard in
+  `state.json`, dus ook na een herstart zichtbaar.
+
+### Zoeken
+- **Prijsfilter en sortering bij de winkel zelf** in plaats van op de geladen
+  resultaten: "X gevonden" en "Meer laden" kloppen nu voor het hele
+  prijsbereik. Nieuw: sorteren op relevantie, prijs oplopend of aflopend.
+  Wijzigen van prijs of sortering start automatisch een nieuwe zoekopdracht
+  (bij typen na een korte pauze). Kruidvat/Trekpleister:
+  `/search/<term>:<sort>:salePriceRange:<min> TO <max>`; ICI via het
+  `price`-facet in de API-query (getest op alle vier de winkels).
+
+### Tests
+- 55 tests (was 47): storingen bij een omgebouwde site (zoeken, watchlist,
+  gratis-checker), de storingsmelding van de gratis-checker inclusief
+  "geen tweede melding" en stil herstel, winkelstatus, en de URL's voor
+  sortering en prijsbereik per winkel.
+
+### Buiten de image
+- `commit-git.sh` stopt vooraf met een duidelijke melding als er bestanden
+  alleen in de cloud staan (OneDrive), in plaats van te blijven hangen, en
+  commit op naam van Marc van der Kooy met het GitHub-noreply-adres.
+
 ## [2.10.0] — 2026-11-09
 
 ### Toegevoegd

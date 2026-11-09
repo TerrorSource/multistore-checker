@@ -21,6 +21,9 @@ const settings = { siteDelayMs: 2000 };
 // en werkt exact als in multistorechecker v1.x, zodat een bestaande seen.json
 // gewoon meegenomen wordt.
 const SEEN_FILE = path.join(DATA_DIR, 'seen.json');
+// Lopende storingen per winkel, zodat een storing één keer gemeld wordt (en
+// pas weer nadat de winkel tussendoor bereikbaar is geweest).
+const OUTAGE_FILE = path.join(DATA_DIR, 'gratis-outages.json');
 const DEFAULT_ONLY_NEW_DAYS = 7;
 
 // Zoekfilter: producten met een verkoopprijs tussen 0 en 0.48 EUR
@@ -118,17 +121,14 @@ function inStockOf(availability) {
 
 // --- Scraper (Spartacus: Kruidvat NL/BE en Trekpleister) ------------------
 
+// Gooit een fout als de pagina geen leesbare zoekresultaten bevat: dan is de
+// site omgebouwd, en dat moet als storing gemeld worden in plaats van als
+// "geen gratis producten gevonden".
 function scrapeSpartacus(html, site) {
   const state = extractSpartacusState(html);
-  if (!state) {
-    console.error(`${site.displayName}: spartacus-app-state niet gevonden (sitestructuur gewijzigd?).`);
-    return [];
-  }
+  if (!state) throw new Error('geen productdata in de pagina (sitestructuur gewijzigd?)');
   const model = findSearchModel(state);
-  if (!model) {
-    console.error(`${site.displayName}: zoekresultaten niet gevonden in app-state.`);
-    return [];
-  }
+  if (!model) throw new Error('geen zoekresultaten in de pagina (sitestructuur gewijzigd?)');
 
   // Een ontbrekend price-object telt ook als "geen prijs aanwezig".
   return model.products
@@ -165,19 +165,32 @@ function scrapeSpartacus(html, site) {
 
 // --- Check ------------------------------------------------------------------
 
-// Geeft null terug als de site onbereikbaar is (na één herkansing), zodat de
-// caller een storing kan onderscheiden van "0 gratis producten gevonden".
+// Geeft { products } of, na één herkansing, { error } terug, zodat de caller
+// een storing kan onderscheiden van "0 gratis producten gevonden".
 async function scrapeSite(site) {
   try {
-    const html = await stores.withRetry(async () => {
+    const products = await stores.withRetry(async () => {
       const res = await stores.net.fetch(site.checkUrl, { headers: BROWSER_HEADERS, redirect: 'follow' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.text();
+      return scrapeSpartacus(await res.text(), site);
     });
-    return scrapeSpartacus(html, site);
+    return { products };
   } catch (err) {
     console.error(`${site.displayName}: ophalen mislukt: ${err.message}`);
-    return null;
+    return { error: err.message };
+  }
+}
+
+function loadOutages() {
+  const { data } = readJson(OUTAGE_FILE, {});
+  return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+}
+
+function saveOutages(outages) {
+  try {
+    writeJsonAtomic(OUTAGE_FILE, outages);
+  } catch (err) {
+    console.error('gratis-outages.json opslaan mislukt:', err.message);
   }
 }
 
@@ -208,6 +221,7 @@ async function runGratisCheck(config, isManual = false) {
 
   const seen = loadSeen();
   pruneSeen(seen, maxAgeDays);
+  const outages = loadOutages();
   const now = new Date().toISOString();
   const results = [];
 
@@ -216,13 +230,22 @@ async function runGratisCheck(config, isManual = false) {
     if (!site) continue;
     if (i > 0) await delay(settings.siteDelayMs);
 
-    const products = await scrapeSite(site);
-    if (products === null) {
-      // Storing: geen "0 gevonden"-bericht sturen, wel zichtbaar in het log
-      // en de samenvatting.
-      results.push({ site: site.displayName, siteKey: site.key, error: true, totalFound: 0, afterFilter: 0, newCount: 0 });
+    const scraped = await scrapeSite(site);
+    if (scraped.error) {
+      // Storing: geen "0 gevonden"-bericht, maar één melding per storing.
+      // Een volgende komt pas nadat de winkel tussendoor bereikbaar was.
+      results.push({ site: site.displayName, siteKey: site.key, error: true, errorMessage: scraped.error, totalFound: 0, afterFilter: 0, newCount: 0 });
+      if (!outages[site.key]) {
+        outages[site.key] = { since: now, error: scraped.error };
+        await broadcast(targets,
+          `⚠️ Gratis-checker: ${site.displayName} is niet te controleren (${scraped.error}). `
+          + 'Je krijgt hierover geen nieuwe melding tot de check daar weer gelukt is.');
+      }
       continue;
     }
+    // Weer bereikbaar: stil herstellen.
+    delete outages[site.key];
+    const products = scraped.products;
 
     // inStock: true = bestelbaar, false = uitverkocht of niet bestelbaar,
     // null = onbekend. Bij 'alleen bestelbaar' houden we true én onbekend aan.
@@ -272,6 +295,7 @@ async function runGratisCheck(config, isManual = false) {
   }
 
   saveSeen(seen);
+  saveOutages(outages);
   return { success: true, results, timestamp: new Date().toISOString() };
 }
 

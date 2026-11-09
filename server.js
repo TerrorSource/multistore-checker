@@ -194,12 +194,26 @@ let checkRunning = false;
 let logs = [];
 const MAX_LOGS = 100;
 
+// Gezondheid per winkel, gevoed door alle verzoeken (watchlist-check,
+// gratis-check, zoeken): wanneer lukte het laatst, en wat was de laatste fout.
+// Zichtbaar op het dashboard, zodat een stille storing opvalt.
+let siteHealth = {};
+function recordSite(siteKey, ok, error = null, source = '') {
+  if (!siteKey) return;
+  const h = siteHealth[siteKey] = siteHealth[siteKey] || { lastOk: null, lastError: null, lastErrorAt: null };
+  const now = new Date().toISOString();
+  if (ok) h.lastOk = now;
+  else { h.lastError = (source ? source + ': ' : '') + (error || 'onbekende fout'); h.lastErrorAt = now; }
+  saveStateSoon();
+}
+
 function loadState() {
   const { data: s } = readJson(STATE_FILE, null);
   if (!s || typeof s !== 'object') return;
   if (Array.isArray(s.logs)) logs = s.logs.slice(0, MAX_LOGS);
   lastCheckResult = s.lastCheckResult || null;
   lastGratisResult = s.lastGratisResult || null;
+  if (s.siteHealth && typeof s.siteHealth === 'object') siteHealth = s.siteHealth;
 }
 
 // Schrijven gebeurt uitgesteld (max. 1x per seconde), zodat een reeks
@@ -210,7 +224,7 @@ function saveStateSoon() {
   saveStateTimer = setTimeout(() => {
     saveStateTimer = null;
     try {
-      writeJsonAtomic(STATE_FILE, { logs, lastCheckResult, lastGratisResult });
+      writeJsonAtomic(STATE_FILE, { logs, lastCheckResult, lastGratisResult, siteHealth });
     } catch (err) {
       console.error('state.json opslaan mislukt:', err.message);
     }
@@ -367,6 +381,7 @@ async function executeGratisCheck(isManual) {
   try {
     const result = await withRunCap(withScrapeSlot(() => runGratisCheck(config, isManual)), 'Gratis-check');
     lastGratisResult = result;
+    for (const r of (result.results || [])) recordSite(r.siteKey, !r.error, r.errorMessage, 'gratis-check');
     if (result.success) {
       const summary = result.results
         .map(r => `${r.site}: ${r.error ? 'fout' : r.afterFilter}`)
@@ -403,6 +418,7 @@ async function executeCheck(isManual) {
       addLog(`Watchlist opslaan na check mislukt: ${err.message}`);
     }
     lastCheckResult = result;
+    for (const [k, v] of Object.entries(result.sites || {})) recordSite(k, v.ok, v.error, 'watchlist');
     if (result.success) {
       const outages = (result.outages && result.outages.length)
         ? `; onbereikbaar: ${result.outages.map(k => siteConfigs[k] ? siteConfigs[k].displayName : k).join(', ')}`
@@ -500,11 +516,20 @@ app.get('/api/search', async (req, res) => {
   const start = Math.max(0, parseInt(req.query.start, 10) || 0);
   if (!term) return res.json({ success: false, error: 'Geen zoekterm opgegeven' });
   if (!KNOWN_SITES.includes(site)) return res.json({ success: false, error: `Onbekende site: ${site}` });
+  // Sortering en prijsbereik gaan naar de winkel zelf (zie stores.js);
+  // ongeldige waarden worden daar genegeerd.
+  const options = {
+    sort: req.query.sort,
+    priceMin: req.query.min !== undefined && req.query.min !== '' ? String(req.query.min).replace(',', '.') : null,
+    priceMax: req.query.max !== undefined && req.query.max !== '' ? String(req.query.max).replace(',', '.') : null
+  };
 
   try {
-    const result = await withScrapeSlot(() => searchProducts(site, term, start, 100));
+    const result = await withScrapeSlot(() => searchProducts(site, term, start, 100, options));
+    recordSite(site, true);
     res.json({ success: true, site, term, ...result });
   } catch (err) {
+    recordSite(site, false, err.message, 'zoeken');
     addLog(`Zoeken naar "${term}" (${site}) mislukt: ${err.message}`);
     res.json({ success: false, error: err.message });
   }
@@ -646,6 +671,12 @@ app.get('/api/status', (req, res) => {
     },
     telegram: watcher.getTelegramState(),
     update: updateInfo,
+    sites: Object.fromEntries(KNOWN_SITES.map(k => {
+      const h = siteHealth[k] || {};
+      const state = !h.lastOk && !h.lastErrorAt ? 'unknown'
+        : (h.lastErrorAt && (!h.lastOk || h.lastErrorAt > h.lastOk) ? 'error' : 'ok');
+      return [k, { name: siteConfigs[k].displayName, state, lastOk: h.lastOk || null, lastError: h.lastError || null, lastErrorAt: h.lastErrorAt || null }];
+    })),
     logs: logs.slice(0, 20)
   });
 });
