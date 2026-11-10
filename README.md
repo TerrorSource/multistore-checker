@@ -25,15 +25,16 @@ stellen:
 - **Zoeken** (hoofdpagina): producten zoeken op naam of productcode, per
   winkel (Kruidvat NL/BE, Trekpleister, ICI PARIS XL), met statusbalk en een
   filter om producten die niet op voorraad zijn ook te tonen (standaard
-  verborgen), een prijsfilter (van – tot) en sorteren op relevantie of prijs.
-  Prijs en sortering past de winkel zelf toe, dus het aantal gevonden
-  resultaten klopt voor het hele bereik. Per zoekopdracht tot 100
-  resultaten, met "Meer laden" voor de volgende 100; boven de resultaten staat
-  hoeveel er gevonden, geladen en na de filters getoond zijn Het laatste zoekresultaat (incl. filters) blijft staan als je
-  naar een andere pagina gaat en terugkomt (bewaard per browsertabblad)
+  verborgen), een prijsfilter (van – tot), filters op merk en op actie van de
+  winkel, en sorteren op relevantie of prijs. Al deze filters past de winkel
+  zelf toe, dus het aantal gevonden resultaten klopt voor het hele resultaat.
+  Per zoekopdracht tot 100 resultaten, met "Meer laden" voor de volgende 100;
+  boven de resultaten staat hoeveel er gevonden, geladen en getoond zijn. Het
+  laatste zoekresultaat (incl. filters) blijft staan als je naar een andere
+  pagina gaat en terugkomt (bewaard per browsertabblad)
 - **Actie-categorieën**: elke aanbieding wordt ingedeeld in een categorie
   (1+1 / X+Y gratis, 2e halve prijs, % korting, afgeprijsd, overig) waarop je
-  in de zoekresultaten kunt filteren. "Gratis verzending" telt niet als
+  in de geladen zoekresultaten kunt filteren. "Gratis verzending" telt niet als
   actie: producten met alleen dat label worden niet als aanbieding getoond
   of gemeld
 - **Gevolgde producten** (eigen pagina): producten markeren om te volgen, met
@@ -48,9 +49,10 @@ stellen:
   erbij of het écht te bestellen is: *op voorraad* (bestelbaar), *niet
   bestelbaar (geen prijs)* (de winkel weigert artikelen zonder prijs
   server-side, ook als er voorraad is) of *niet op voorraad*
-- **Status per winkel** op het dashboard: wanneer het laatste verzoek lukte,
+- **Status per winkel** op elke pagina: wanneer het laatste verzoek lukte,
   of in rood sinds wanneer er een storing is. Zowel de watchlist als de
-  gratis-checker sturen één Telegram-melding per storing per winkel
+  gratis-checker sturen één Telegram-melding per storing per winkel, en
+  daarna elke 24 uur een herinnering zolang de storing duurt
 - **Scheduler**: automatisch checken op instelbaar interval, plus handmatige check
 - Alle data blijft bewaard in het `/data`-volume
 
@@ -85,9 +87,21 @@ actie opgehaald (maximaal 20 per zoekopdracht, 4 tegelijk).
 
 Voor alle verzoeken is de volledige browser-headerset vereist (inclusief
 `sec-ch-ua` en `Sec-Fetch-*`), anders blokkeert Akamai met een 403. Akamai
-weigert bovendien te oude Chrome-versies (in november 2026: alles onder 143);
-de app rekent daarom de actuele Chrome-versie uit de datum uit (4 weken per
-versie). Overschrijven kan met `CHROME_VERSION`.
+weigert bovendien te oude Chrome-versies (in november 2026: alles onder 143).
+De app haalt daarom dagelijks de actuele stabiele Chrome-versie op uit
+Google's openbare versielijst (`versionhistory.googleapis.com`) en rekent
+hem uit de datum uit als Google niet bereikbaar is (sinds augustus 2026 een
+nieuwe versie per 2 weken). Vastzetten kan met `CHROME_VERSION`, het ophalen
+uitschakelen met `CHROME_VERSION_CHECK=false`. De gebruikte versie staat in
+de voettekst van het dashboard.
+
+**Zoekfilters** gaan als Spartacus-query naar de winkel:
+`<term>:<sortering>:<facet>:<waarde>…`, bij Kruidvat en Trekpleister in het
+URL-pad, bij ICI in de API-query. Facetten: `salePriceRange` (ICI: `price`),
+`stockLevel:inStock` (ICI: `stockLevelStatus:INSTOCK` + `LOWSTOCK`),
+`masterBrandName` en `promotionCategory` (ICI: `offers`). De keuzelijsten
+voor merk en actie komen uit de facetten die de winkel bij de zoekopdracht
+meestuurt.
 
 ### Robuustheid
 
@@ -97,7 +111,7 @@ versie). Overschrijven kan met `CHROME_VERSION`.
 - Alles wat naar de winkels gaat (geplande checks, zoeken, een nieuw product
   volgen) loopt door één gedeeld scrape-slot, dus nooit parallel.
 - Is een winkel als geheel onbereikbaar, dan komt er één storingsmelding per
-  winkel (en pas weer een nieuwe nadat de winkel bereikbaar is geweest);
+  winkel, en zolang de storing duurt elke 24 uur een herinnering;
   de gevolgde producten van die winkel behouden hun laatste bekende status.
   Een product dat 3 checks op rij écht niet gevonden wordt, wordt éénmalig
   gemeld als "mogelijk verdwenen".
@@ -147,7 +161,8 @@ docker run -d --name multistore-checker \
 | `TELEGRAM_BOT_TOKEN` | Eerste Telegram-bot (alleen bij eerste start) | – |
 | `TELEGRAM_CHAT_ID` | Bijbehorende chat-ID | – |
 | `CHECK_INTERVAL` | Standaard interval in minuten | `360` |
-| `CHROME_VERSION` | Chrome-versie in de browserheaders (standaard uit de datum berekend) | – |
+| `CHROME_VERSION` | Zet de Chrome-versie in de browserheaders vast (standaard: actuele versie volgens Google) | – |
+| `CHROME_VERSION_CHECK` | `false` schakelt het dagelijks ophalen van de Chrome-versie bij Google uit (dan geldt de berekende versie) | `true` |
 | `UPDATE_CHECK` | `false` schakelt de dagelijkse versie-check op GitHub uit | `true` |
 | `UPDATE_REPO` | Repo waarvan de versie-tags gelezen worden | `TerrorSource/multistore-checker` |
 
@@ -173,3 +188,5 @@ Telegram kan ook volledig via het dashboard geconfigureerd worden.
 - `watchlist.json` — gevolgde producten (incl. laatste status per product)
 - `notified.json` — welke actie per product al gemeld is
 - `seen.json` — geziene producten van de gratis-checker
+- `gratis-outages.json` — lopende storingen van de gratis-checker
+- `state.json` — laatste check-resultaten, logregels en status per winkel

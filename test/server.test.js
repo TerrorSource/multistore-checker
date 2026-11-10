@@ -5,6 +5,9 @@ const path = require('path');
 const { useTempDataDir, spartacusHtml, apiSearch, kvProduct, mockResponse, makeFetch } = require('./helpers');
 
 const dataDir = useTempDataDir();
+// De dagelijkse Chrome-versiecheck (en de hercheck na een 403) hoort niet door
+// de nep-fetch van andere tests heen te lopen; stores.test.js test hem zelf.
+process.env.CHROME_VERSION_CHECK = 'false';
 const stores = require('../stores');
 const { app, migrateV1Config, parseSemver, compareSemver, checkForUpdate, updateInfo } = require('../server');
 const { version } = require('../package.json');
@@ -175,4 +178,29 @@ test('zoeken geeft sortering en prijsbereik door aan de winkel', async () => {
   assert.equal(r.priceMin, 2.5);
   assert.equal(r.priceMax, 5);
   assert.equal(fetchMock.calls[0].url, 'https://www.kruidvat.nl/search/tandpasta:price-asc:salePriceRange:2.5%20TO%205');
+});
+
+test('zoeken geeft voorraad, merk en actie door en levert de keuzelijsten', async () => {
+  const facets = [
+    { code: 'masterBrandName', values: [{ code: 'Kruidvat', name: 'Kruidvat', count: 33 }] },
+    { code: 'promotionCategory', values: [{ code: 'promo_1', name: 'Kruidvat shampoo 4 voor 5.00', count: 8 }] }
+  ];
+  const fetchMock = makeFetch([[/kruidvat\.nl/, () => mockResponse(spartacusHtml([kvProduct()], { totalResults: 1 }, facets))]]);
+  stores.net.fetch = fetchMock;
+  const r = await get('/api/search?site=nl&q=shampoo&stock=1&brand=Kruidvat&promo=promo_1');
+  assert.equal(r.success, true);
+  assert.equal(fetchMock.calls[0].url, 'https://www.kruidvat.nl/search/shampoo:score:stockLevel:inStock:masterBrandName:Kruidvat:promotionCategory:promo_1');
+  assert.equal(r.inStock, true);
+  assert.equal(r.brand, 'Kruidvat');
+  assert.equal(r.facets.brands[0].count, 33);
+  assert.equal(r.facets.promos[0].name, 'Kruidvat shampoo 4 voor 5.00');
+  // Zonder de parameters blijft het de kale zoekterm.
+  await get('/api/search?site=nl&q=shampoo&stock=0&brand=');
+  assert.equal(fetchMock.calls[1].url, 'https://www.kruidvat.nl/search/shampoo');
+});
+
+test('status toont welke Chrome-versie in de browserheaders zit', async () => {
+  const s = await get('/api/status');
+  assert.equal(s.chrome.major, stores.CHROME_MAJOR);
+  assert.ok(['env', 'google', 'berekend'].includes(s.chrome.source));
 });

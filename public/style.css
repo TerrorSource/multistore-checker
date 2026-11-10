@@ -162,6 +162,10 @@ input:focus, select:focus { outline: none; border-color: var(--kv-red); box-shad
 .price-row .chip-label { font-size: 13px; color: var(--kv-muted); }
 .price-row .price-field { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .price-row select { padding: 7px 10px; font-size: 13px; }
+/* Merk- en actiekeuzelijst: lange namen mogen de rij niet uit elkaar duwen. */
+.price-row .price-field { max-width: 100%; }
+.price-row select.facet-select { max-width: 240px; min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
+.price-row select:disabled { opacity: 0.55; }
 
 /* Status per winkel onder de statusbalk */
 .site-health {
@@ -170,6 +174,8 @@ input:focus, select:focus { outline: none; border-color: var(--kv-red); box-shad
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); font-size: 13px;
 }
 .site-health[hidden] { display: none; }
+/* Op pagina's zonder statusbalk erboven. */
+.site-health.standalone { margin-top: 0; }
 .site-health-label { color: var(--kv-muted); }
 .site-state.ok { color: var(--kv-green); }
 .site-state.error { color: var(--kv-red); font-weight: 600; cursor: help; }

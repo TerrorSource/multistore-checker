@@ -151,3 +151,40 @@ test('lange lijsten worden onder de Telegram-limiet gesplitst', async () => {
   const totaal = sent.reduce((n, m) => n + (m.text.match(/• regel/g) || []).length, 0);
   assert.equal(totaal, 200);
 });
+
+test('langdurige storing: na een dag een herinnering, daarna weer een dag stil', async () => {
+  const wl = [{ site: 'nl', code: 'A', name: 'A' }];
+  const file = path.join(dataDir, 'notified.json');
+  const terug = (uren) => new Date(Date.now() - uren * 3600000).toISOString();
+  behaviour.A = 'throw';
+  await watcher.runCheck(cfg, wl, false);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /elke 24 uur een herinnering/);
+  assert.ok(notified()['_outage:nl'].lastNotified);
+
+  await watcher.runCheck(cfg, wl, false);
+  assert.equal(sent.length, 1, 'binnen een dag: stil');
+
+  // 26 uur later is de storing er nog steeds.
+  const n = notified();
+  n['_outage:nl'].since = terug(26);
+  n['_outage:nl'].lastNotified = terug(26);
+  fs.writeFileSync(file, JSON.stringify(n));
+  await watcher.runCheck(cfg, wl, false);
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].text, /Kruidvat NL is nog steeds onbereikbaar, sinds .* \(26 uur\)/);
+  assert.match(sent[1].text, /Laatste fout: HTTP 403/);
+  await watcher.runCheck(cfg, wl, false);
+  assert.equal(sent.length, 2, 'na de herinnering weer een dag stil');
+
+  // Een storing van vóór 2.12.0 heeft geen lastNotified: telt vanaf het begin.
+  fs.writeFileSync(file, JSON.stringify({ '_outage:nl': { since: terug(72), error: 'HTTP 403' } }));
+  await watcher.runCheck(cfg, wl, false);
+  assert.equal(sent.length, 3);
+  assert.match(sent[2].text, /\(3 dagen\)/);
+
+  behaviour.A = 'ok';
+  await watcher.runCheck(cfg, wl, false);
+  assert.equal(sent.length, 3, 'herstel blijft stil');
+  assert.equal(notified()['_outage:nl'], undefined);
+});

@@ -8,7 +8,7 @@ const path = require('path');
 // zodat tests de netwerkkant kunnen vervangen.
 const stores = require('./stores');
 const { BROWSER_HEADERS, extractSpartacusState, findSearchModel } = stores;
-const { validTargets, broadcast, sendList, escapeHTML, escapeAttr } = require('./watcher');
+const { validTargets, broadcast, sendList, escapeHTML, escapeAttr, outageReminderDue, outageAge, reminderEvery } = require('./watcher');
 const { readJson, writeJsonAtomic } = require('./storage');
 
 const { DATA_DIR } = require('./datadir');
@@ -21,8 +21,9 @@ const settings = { siteDelayMs: 2000 };
 // en werkt exact als in multistorechecker v1.x, zodat een bestaande seen.json
 // gewoon meegenomen wordt.
 const SEEN_FILE = path.join(DATA_DIR, 'seen.json');
-// Lopende storingen per winkel, zodat een storing één keer gemeld wordt (en
-// pas weer nadat de winkel tussendoor bereikbaar is geweest).
+// Lopende storingen per winkel ({ since, error, lastNotified }): een storing
+// wordt één keer gemeld en daarna, zolang hij duurt, eens per dag herinnerd
+// (watcher.settings.outageReminderMs).
 const OUTAGE_FILE = path.join(DATA_DIR, 'gratis-outages.json');
 const DEFAULT_ONLY_NEW_DAYS = 7;
 
@@ -232,14 +233,22 @@ async function runGratisCheck(config, isManual = false) {
 
     const scraped = await scrapeSite(site);
     if (scraped.error) {
-      // Storing: geen "0 gevonden"-bericht, maar één melding per storing.
-      // Een volgende komt pas nadat de winkel tussendoor bereikbaar was.
+      // Storing: geen "0 gevonden"-bericht, maar één melding per storing, en
+      // zolang die duurt af en toe een herinnering.
       results.push({ site: site.displayName, siteKey: site.key, error: true, errorMessage: scraped.error, totalFound: 0, afterFilter: 0, newCount: 0 });
       if (!outages[site.key]) {
-        outages[site.key] = { since: now, error: scraped.error };
+        outages[site.key] = { since: now, error: scraped.error, lastNotified: now };
         await broadcast(targets,
           `⚠️ Gratis-checker: ${site.displayName} is niet te controleren (${scraped.error}). `
-          + 'Je krijgt hierover geen nieuwe melding tot de check daar weer gelukt is.');
+          + `Blijft dat zo, dan krijg je elke ${reminderEvery()} een herinnering.`);
+      } else {
+        outages[site.key].error = scraped.error;
+        if (outageReminderDue(outages[site.key])) {
+          outages[site.key].lastNotified = now;
+          await broadcast(targets,
+            `⏰ Gratis-checker: ${site.displayName} is nog steeds niet te controleren, ${outageAge(outages[site.key].since)}. `
+            + `Laatste fout: ${scraped.error}.`);
+        }
       }
       continue;
     }

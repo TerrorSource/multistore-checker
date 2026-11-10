@@ -62,7 +62,7 @@
         <label for="showOutOfStock">Toon ook producten die niet op voorraad zijn</label>
       </div>
       <div class="chip-row" id="categoryChips">
-        <span class="chip-label">Actie:</span>
+        <span class="chip-label">Soort actie:</span>
       </div>
       <div class="filter-row price-row">
         <span class="chip-label">Prijs:</span>
@@ -70,7 +70,6 @@
         <input type="text" inputmode="decimal" id="priceMin" placeholder="min" autocomplete="off"></span>
         <span class="price-field"><label for="priceMax">tot €</label>
         <input type="text" inputmode="decimal" id="priceMax" placeholder="max" autocomplete="off"></span>
-        <button type="button" class="btn btn-small btn-secondary" id="btnPriceReset" hidden>Wissen</button>
         <span class="price-field"><label for="searchSort">Sorteren:</label>
         <select id="searchSort">
           <option value="relevance">Relevantie</option>
@@ -78,11 +77,18 @@
           <option value="price-desc">Prijs aflopend</option>
         </select></span>
       </div>
+      <div class="filter-row price-row">
+        <span class="price-field"><label for="brandFilter">Merk:</label>
+        <select id="brandFilter" class="facet-select" disabled><option value="">Alle merken</option></select></span>
+        <span class="price-field"><label for="promoFilter">Actie van de winkel:</label>
+        <select id="promoFilter" class="facet-select" disabled><option value="">Alle acties</option></select></span>
+        <button type="button" class="btn btn-small btn-secondary" id="btnPriceReset" hidden>Filters wissen</button>
+      </div>
       <div class="result-summary" id="resultSummary" hidden></div>
       <div class="product-list" id="searchResults"></div>
     </div>
 
-    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span><span id="updateNotice"></span></footer>
+    <footer class="app-footer">multistore-checker <span id="appVersion">v…</span><span id="chromeNotice"></span><span id="updateNotice"></span></footer>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -90,7 +96,8 @@
   <script src="/app.js"></script>
   <script>
     let watchlistItems = [];
-    let lastSearch = { site: 'nl', term: '', products: [], nextStart: 0, total: 0, hasMore: false, sort: 'relevance', priceMin: null, priceMax: null };
+    const NO_FACETS = { brands: [], promos: [] };
+    let lastSearch = { site: 'nl', term: '', products: [], nextStart: 0, total: 0, hasMore: false, sort: 'relevance', priceMin: null, priceMax: null, inStock: false, brand: null, promo: null, facets: NO_FACETS };
 
     // Het laatste zoekresultaat blijft bewaard in de sessie van dit tabblad,
     // zodat het er nog staat na een uitstapje naar "Gevolgde producten" of
@@ -119,7 +126,12 @@
         sort: st.sort || 'relevance',
         // Sessies van 2.10.0 bewaarden hier de tekst uit de invoervelden.
         priceMin: typeof st.priceMin === 'number' ? st.priceMin : null,
-        priceMax: typeof st.priceMax === 'number' ? st.priceMax : null
+        priceMax: typeof st.priceMax === 'number' ? st.priceMax : null,
+        // Nieuw in 2.12.0; een sessie van daarvoor heeft deze velden niet.
+        inStock: Boolean(st.inStock),
+        brand: typeof st.brand === 'string' && st.brand ? st.brand : null,
+        promo: typeof st.promo === 'string' && st.promo ? st.promo : null,
+        facets: (st.facets && Array.isArray(st.facets.brands) && Array.isArray(st.facets.promos)) ? st.facets : NO_FACETS
       };
       document.getElementById('searchInput').value = st.term;
       const sel = document.getElementById('searchSite');
@@ -180,6 +192,32 @@
       return { min, max, active: min != null || max != null };
     }
 
+    // Merk- en actiekeuzelijst: gevuld met wat de winkel bij deze zoekopdracht
+    // aanbiedt (met aantallen). Een gekozen waarde die de winkel niet meer
+    // teruggeeft (bv. bij 0 resultaten) blijft als keuze staan, zodat je hem
+    // nog kunt wissen.
+    function renderFacetSelect(id, values, selected, allLabel) {
+      const sel = document.getElementById(id);
+      const list = [...values].sort((a, b) => a.name.localeCompare(b.name, 'nl', { sensitivity: 'base' }));
+      if (selected && !list.some(v => v.code === selected)) list.unshift({ code: selected, name: selected, count: null });
+      sel.innerHTML = `<option value="">${esc(allLabel)}${values.length ? ` (${values.length})` : ''}</option>`
+        + list.map(v => `<option value="${esc(v.code)}">${esc(v.name)}${v.count != null ? ` (${v.count})` : ''}</option>`).join('');
+      sel.value = selected || '';
+      sel.disabled = list.length === 0;
+    }
+    function renderFacets() {
+      const f = lastSearch.facets || NO_FACETS;
+      renderFacetSelect('brandFilter', f.brands, lastSearch.brand, 'Alle merken');
+      renderFacetSelect('promoFilter', f.promos, lastSearch.promo, 'Alle acties');
+    }
+    function facetName(list, code) {
+      const hit = (list || []).find(v => v.code === code);
+      return hit ? hit.name : code;
+    }
+    function filtersActive() {
+      return priceBounds().active || Boolean(document.getElementById('brandFilter').value) || Boolean(document.getElementById('promoFilter').value);
+    }
+
     function isWatched(site, code) {
       return watchlistItems.some(i => i.site === site && i.code === code);
     }
@@ -187,7 +225,10 @@
     function visibleProducts() {
       const showOOS = document.getElementById('showOutOfStock').checked;
       return lastSearch.products.filter(p => {
-        // Prijs en sortering zijn al bij de winkel toegepast (zie doSearch).
+        // Prijs, sortering, voorraad, merk en actie zijn al bij de winkel
+        // toegepast (zie doSearch). De voorraadcontrole hier is een vangnet
+        // voor wat de winkel anders rekent (bv. niet meer te koop, wel
+        // voorraad) en voor resultaten uit een oudere sessie.
         // inStock: true = op voorraad, false = niet, null = onbekend.
         // Onbekend tonen we altijd; 'niet op voorraad' alleen met het vinkje aan.
         if (!showOOS && p.inStock === false) return false;
@@ -202,12 +243,21 @@
     function renderSummary(visibleCount) {
       const el = document.getElementById('resultSummary');
       const { term, products, total } = lastSearch;
-      document.getElementById('btnPriceReset').hidden = !priceBounds().active;
+      document.getElementById('btnPriceReset').hidden = !filtersActive();
       if (!term) { el.hidden = true; return; }
       el.hidden = false;
       const n = (x) => x.toLocaleString('nl-NL');
+      const facets = lastSearch.facets || NO_FACETS;
+      // Wat de winkel al gefilterd heeft, in woorden.
+      const applied = [];
+      if (lastSearch.brand) applied.push(`merk <b>${esc(facetName(facets.brands, lastSearch.brand))}</b>`);
+      if (lastSearch.promo) applied.push(`actie <b>${esc(facetName(facets.promos, lastSearch.promo))}</b>`);
+      if (lastSearch.inStock) applied.push('alleen op voorraad');
       if (products.length === 0) {
-        el.innerHTML = `Geen resultaten gevonden voor <b>${esc(term)}</b>${(lastSearch.priceMin != null || lastSearch.priceMax != null) ? ' binnen dit prijsbereik' : ''}.`;
+        const narrowed = applied.length > 0 || lastSearch.priceMin != null || lastSearch.priceMax != null;
+        let html = `Geen resultaten gevonden voor <b>${esc(term)}</b>${narrowed ? ' met deze filters' : ''}.`;
+        if (lastSearch.inStock) html += '<span class="summary-hint">Producten die niet op voorraad zijn, zijn niet meegezocht; zet het vinkje hierboven aan om ze ook te zien.</span>';
+        el.innerHTML = html;
         return;
       }
       const found = Math.max(total || 0, products.length);
@@ -218,14 +268,15 @@
       else if (lastSearch.priceMax != null) range = ` tot ${eur(lastSearch.priceMax)}`;
       const parts = [`<b>${n(found)}</b> ${found === 1 ? 'resultaat' : 'resultaten'} gevonden voor <b>${esc(term)}</b>${range}`];
       const SORT_LABEL = { 'price-asc': 'prijs oplopend', 'price-desc': 'prijs aflopend' };
+      parts.push(...applied);
       if (SORT_LABEL[lastSearch.sort]) parts.push(`gesorteerd op ${SORT_LABEL[lastSearch.sort]}`);
       if (products.length < found) parts.push(`${n(products.length)} geladen`);
       if (visibleCount !== products.length) parts.push(`<b>${n(visibleCount)}</b> getoond na filters`);
       let html = parts.join(' · ');
-      // Voorraad- en actiefilters werken op de geladen producten (prijs en
-      // sortering niet: die past de winkel al toe op het hele resultaat).
+      // Alleen het filter op soort actie werkt nog op de geladen producten;
+      // de rest past de winkel al toe op het hele resultaat.
       if (visibleCount !== products.length && lastSearch.hasMore) {
-        html += '<span class="summary-hint">Voorraad- en actiefilters gelden voor de geladen resultaten; laad meer voor de rest.</span>';
+        html += '<span class="summary-hint">Het filter op soort actie geldt voor de geladen resultaten; laad meer voor de rest.</span>';
       }
       el.innerHTML = html;
     }
@@ -267,7 +318,7 @@
       });
 
       if (products.length === 0) {
-        rows.push(`<div class="empty-note">Alle ${hidden} geladen producten vallen buiten de filters (voorraad/actie/prijs). Pas de filters aan om ze te tonen.</div>`);
+        rows.push(`<div class="empty-note">Alle ${hidden} geladen producten vallen buiten het filter op soort actie${document.getElementById('showOutOfStock').checked ? '' : ' of zijn niet op voorraad'}. Pas de filters aan om ze te tonen.</div>`);
       }
       // Volgende pagina ophalen zolang de winkel meer resultaten heeft.
       const shown = lastSearch.products.length;
@@ -288,13 +339,22 @@
       const q = new URLSearchParams({ site, q: term, start: String(start), sort: opts.sort || 'relevance' });
       if (opts.priceMin != null) q.set('min', String(opts.priceMin));
       if (opts.priceMax != null) q.set('max', String(opts.priceMax));
+      if (opts.inStock) q.set('stock', '1');
+      if (opts.brand) q.set('brand', opts.brand);
+      if (opts.promo) q.set('promo', opts.promo);
       const res = await fetch('/api/search?' + q);
       return res.json();
     }
 
     function currentOptions() {
       const { min, max } = priceBounds();
-      return { sort: document.getElementById('searchSort').value, priceMin: min, priceMax: max };
+      return {
+        sort: document.getElementById('searchSort').value, priceMin: min, priceMax: max,
+        // Vinkje uit = alleen op voorraad, en dat filtert de winkel zelf.
+        inStock: !document.getElementById('showOutOfStock').checked,
+        brand: document.getElementById('brandFilter').value || null,
+        promo: document.getElementById('promoFilter').value || null
+      };
     }
 
     // Elke zoekopdracht krijgt een volgnummer; een antwoord op een oudere
@@ -307,6 +367,12 @@
       if (!term) return;
       // Ongeldige prijsinvoer: niet zoeken, het veld is al rood gemarkeerd.
       if (document.querySelector('.price-row input.invalid')) return;
+      // Andere zoekterm of winkel: merk en actie horen bij de vorige
+      // zoekopdracht en vervallen (prijs, sortering en voorraad blijven).
+      if (term !== lastSearch.term || site !== lastSearch.site) {
+        document.getElementById('brandFilter').value = '';
+        document.getElementById('promoFilter').value = '';
+      }
       const opts = currentOptions();
       const mySeq = ++searchSeq;
       const btn = document.getElementById('btnSearch');
@@ -320,8 +386,11 @@
           lastSearch = {
             site, term, products: data.products, nextStart: data.nextStart || data.products.length,
             total: data.total || data.products.length, hasMore: Boolean(data.hasMore),
-            sort: data.sort || opts.sort, priceMin: data.priceMin ?? opts.priceMin, priceMax: data.priceMax ?? opts.priceMax
+            sort: data.sort || opts.sort, priceMin: data.priceMin ?? opts.priceMin, priceMax: data.priceMax ?? opts.priceMax,
+            inStock: Boolean(data.inStock ?? opts.inStock), brand: data.brand ?? opts.brand, promo: data.promo ?? opts.promo,
+            facets: data.facets || NO_FACETS
           };
+          renderFacets();
           renderSearchResults();
           saveSearchState();
           if (data.products.length === 0) showToast('Geen producten gevonden', 'info');
@@ -339,8 +408,9 @@
       }
     }
 
-    // Prijs of sortering gewijzigd: opnieuw zoeken (alleen als er al een
-    // zoekterm is). Bij typen in een prijsveld even wachten tot je klaar bent.
+    // Prijs, sortering, voorraad, merk of actie gewijzigd: opnieuw zoeken
+    // (alleen als er al een zoekterm is). Bij typen in een prijsveld even
+    // wachten tot je klaar bent.
     let refineTimer = null;
     function refineSearch(delayMs) {
       clearTimeout(refineTimer);
@@ -409,22 +479,6 @@
       } catch { /* stil */ }
     }
 
-    // Per winkel: groen = laatste verzoek gelukt, rood = storing (met reden en
-    // sinds wanneer), grijs = nog niet geprobeerd sinds de start.
-    function renderSiteHealth(sites) {
-      const el = document.getElementById('siteHealth');
-      if (!sites) { el.hidden = true; return; }
-      const items = Object.values(sites).map(h => {
-        if (h.state === 'error') {
-          return `<span class="site-state error" title="${esc(h.lastError || '')}">● ${esc(h.name)}: storing sinds ${formatTime(h.lastErrorAt)}${h.lastOk ? ` (laatst gelukt ${formatTime(h.lastOk)})` : ''}</span>`;
-        }
-        if (h.state === 'ok') return `<span class="site-state ok">● ${esc(h.name)}: gelukt ${formatTime(h.lastOk)}</span>`;
-        return `<span class="site-state unknown">● ${esc(h.name)}: nog niet gecontroleerd</span>`;
-      });
-      el.innerHTML = '<span class="site-health-label">Winkels:</span> ' + items.join('');
-      el.hidden = false;
-    }
-
     let serverDown = false;
     async function loadStatus() {
       let s;
@@ -444,7 +498,6 @@
         showToast('Verbinding hersteld', 'success');
       }
       applyStatus(s);
-      renderSiteHealth(s.sites);
       const activeEl = document.getElementById('statusActive');
       activeEl.textContent = s.active ? 'Actief' : 'Inactief';
       activeEl.className = 'value ' + (s.active ? 'active' : 'inactive');
@@ -462,7 +515,9 @@
     document.getElementById('searchInput').addEventListener('keydown', e => {
       if (e.key === 'Enter') doSearch();
     });
-    document.getElementById('showOutOfStock').addEventListener('change', () => { renderSearchResults(); saveSearchState(); });
+    document.getElementById('showOutOfStock').addEventListener('change', () => { renderSearchResults(); refineSearch(0); });
+    document.getElementById('brandFilter').addEventListener('change', () => refineSearch(0));
+    document.getElementById('promoFilter').addEventListener('change', () => refineSearch(0));
     for (const id of ['priceMin', 'priceMax']) {
       document.getElementById(id).addEventListener('input', () => refineSearch(800));
       document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') refineSearch(0); });
@@ -471,10 +526,13 @@
     document.getElementById('btnPriceReset').addEventListener('click', () => {
       document.getElementById('priceMin').value = '';
       document.getElementById('priceMax').value = '';
+      document.getElementById('brandFilter').value = '';
+      document.getElementById('promoFilter').value = '';
       refineSearch(0);
     });
 
     restoreSearchState();
+    renderFacets();
     renderCategoryChips();
     renderSearchResults();
     // Watchlist laden en daarna opnieuw renderen, zodat bewaarde resultaten

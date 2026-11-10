@@ -227,10 +227,10 @@ test('Trekpleister: mislukte productpagina laat het label "Aanbieding" staan', a
   assert.equal(p.promo.promoCode, '9');
 });
 
-test('Chrome-versie wordt uit de datum berekend en is te overschrijven', () => {
-  assert.equal(stores.currentChromeMajor(Date.UTC(2025, 8, 2)), 140);
-  assert.equal(stores.currentChromeMajor(Date.UTC(2026, 10, 9)), 154);
-  assert.equal(stores.currentChromeMajor(Date.UTC(2024, 0, 1)), 140, 'nooit lager dan de basis');
+test('Chrome-versie: berekening uit de datum als vangnet, en te overschrijven', () => {
+  assert.equal(stores.currentChromeMajor(Date.UTC(2026, 7, 26)), 153);
+  assert.equal(stores.currentChromeMajor(Date.UTC(2026, 10, 10)), 157, 'één onder de echte stabiele versie (158) van die dag');
+  assert.equal(stores.currentChromeMajor(Date.UTC(2024, 0, 1)), 153, 'nooit lager dan de basis');
   process.env.CHROME_VERSION = '160';
   assert.equal(stores.currentChromeMajor(), 160);
   delete process.env.CHROME_VERSION;
@@ -287,9 +287,19 @@ test('ICI: sortering en prijsbereik via het price-facet in de API-query', async 
 });
 
 test('zoekopties worden genormaliseerd', () => {
-  assert.deepEqual(stores.normalizeOptions({}), { sort: 'relevance', priceMin: null, priceMax: null });
-  assert.deepEqual(stores.normalizeOptions({ sort: 'hack', priceMin: '5', priceMax: '2.5' }), { sort: 'relevance', priceMin: 2.5, priceMax: 5 }, 'omgedraaid + onbekende sortering');
-  assert.deepEqual(stores.normalizeOptions({ priceMin: -1, priceMax: 'abc' }), { sort: 'relevance', priceMin: null, priceMax: null });
+  const leeg = { inStock: false, brand: null, promo: null };
+  assert.deepEqual(stores.normalizeOptions({}), { sort: 'relevance', priceMin: null, priceMax: null, ...leeg });
+  assert.deepEqual(stores.normalizeOptions({ sort: 'hack', priceMin: '5', priceMax: '2.5' }), { sort: 'relevance', priceMin: 2.5, priceMax: 5, ...leeg }, 'omgedraaid + onbekende sortering');
+  assert.deepEqual(stores.normalizeOptions({ priceMin: -1, priceMax: 'abc' }), { sort: 'relevance', priceMin: null, priceMax: null, ...leeg });
+  const f = stores.normalizeOptions({ inStock: '1', brand: '  Head & Shoulders ', promo: 'promo_1' });
+  assert.equal(f.inStock, true);
+  assert.equal(f.brand, 'Head & Shoulders');
+  assert.equal(f.promo, 'promo_1');
+  assert.equal(stores.normalizeOptions({ brand: 'x:stockLevel:outOfStock' }).brand, null, 'dubbele punt zou de query breken');
+  assert.equal(stores.normalizeOptions({ brand: 'x'.repeat(500) }).brand, null);
+  assert.equal(stores.normalizeOptions({ inStock: 'ja' }).inStock, false);
+  // Idempotent: searchProducts en fetchSearchPage normaliseren allebei.
+  assert.deepEqual(stores.normalizeOptions(f), f);
 });
 
 test('HTTP-fout bij zoeken geeft een duidelijke fout', async () => {
@@ -303,4 +313,95 @@ test('withRetry probeert één keer opnieuw en geeft daarna op', async () => {
   assert.equal(v, 'ok');
   assert.equal(n, 2);
   await assert.rejects(stores.withRetry(async () => { throw new Error('blijft'); }, { delayMs: 1 }), /blijft/);
+});
+
+test('Chrome-versie komt van Google; bij een fout blijft de laatst bekende staan', async () => {
+  const google = (body, opts) => [/versionhistory\.googleapis\.com/, () => mockResponse(body, opts)];
+  const fetchMock = makeFetch([google({ versions: [{ version: '158.0.8127.18' }] }), [/api\.iciparisxl\.nl/, () => mockResponse(apiSearch([]))]]);
+  stores.net.fetch = fetchMock;
+  let info = await stores.refreshChromeVersion();
+  assert.equal(info.major, 158);
+  assert.equal(info.source, 'google');
+  assert.equal(stores.CHROME_MAJOR, 158);
+  assert.match(stores.BROWSER_HEADERS['User-Agent'], /Chrome\/158\.0\.0\.0/);
+  assert.match(stores.BROWSER_HEADERS['sec-ch-ua'], /"Google Chrome";v="158"/);
+  // Ook de API-verzoeken (ICI) gebruiken meteen de nieuwe versie.
+  await stores.searchProducts('ici', 'x');
+  const apiCall = fetchMock.calls.find(c => c.url.includes('iciparisxl'));
+  assert.match(apiCall.options.headers['User-Agent'], /Chrome\/158\./);
+  assert.equal(apiCall.options.headers['Accept'], 'application/json, text/plain, */*');
+
+  stores.net.fetch = makeFetch([google('', { ok: false, status: 500 })]);
+  info = await stores.refreshChromeVersion();
+  assert.equal(info.major, 158, 'Google onbereikbaar: versie blijft');
+  assert.match(info.lastError, /HTTP 500/);
+
+  stores.net.fetch = makeFetch([google({ versions: [{ version: '12.0.1' }] })]);
+  info = await stores.refreshChromeVersion();
+  assert.equal(info.major, 158, 'onzinnig antwoord wordt genegeerd');
+  assert.match(info.lastError, /onverwachte versie/);
+
+  stores.net.fetch = makeFetch([google({ versions: [{ version: '159.0.1.2' }] })]);
+  info = await stores.refreshChromeVersion();
+  assert.equal(info.major, 159);
+  assert.equal(info.lastError, null);
+
+  // CHROME_VERSION gaat altijd voor en Google wordt dan niet geraadpleegd.
+  const geenVerkeer = makeFetch([]);
+  stores.net.fetch = geenVerkeer;
+  process.env.CHROME_VERSION = '170';
+  info = await stores.refreshChromeVersion();
+  delete process.env.CHROME_VERSION;
+  assert.equal(info.major, 170);
+  assert.equal(info.source, 'env');
+  assert.equal(geenVerkeer.calls.length, 0);
+});
+
+test('voorraad, merk en actie gaan als facet naar Kruidvat/Trekpleister', async () => {
+  const facets = [
+    { code: 'masterBrandName', name: 'Merk', multiSelect: true, values: [
+      { code: 'Head & Shoulders', name: 'Head & Shoulders', count: 24, selected: true },
+      { code: 'Kruidvat', name: 'Kruidvat', count: 33, selected: false }
+    ] },
+    { code: 'promotionCategory', name: 'Acties', values: [{ code: 'promo_5528541', name: 'Andrelon 2+2 gratis', count: 49 }] },
+    { code: 'stockLevel', values: [{ code: 'inStock', name: 'ja', count: 569 }] }
+  ];
+  const fetchMock = makeFetch([[/kruidvat|trekpleister/, () => mockResponse(spartacusHtml([kvProduct()], { totalResults: 1 }, facets))]]);
+  stores.net.fetch = fetchMock;
+  const r = await stores.searchProducts('nl', 'shampoo', 0, 100, { inStock: true, brand: 'Head & Shoulders', promo: 'promo_5528541' });
+  assert.equal(fetchMock.calls[0].url,
+    'https://www.kruidvat.nl/search/shampoo:score:stockLevel:inStock:masterBrandName:Head%20%26%20Shoulders:promotionCategory:promo_5528541');
+  assert.equal(r.inStock, true);
+  assert.equal(r.brand, 'Head & Shoulders');
+  assert.equal(r.promo, 'promo_5528541');
+  assert.deepEqual(r.facets.brands, [
+    { code: 'Head & Shoulders', name: 'Head & Shoulders', count: 24, selected: true },
+    { code: 'Kruidvat', name: 'Kruidvat', count: 33, selected: false }
+  ]);
+  assert.deepEqual(r.facets.promos, [{ code: 'promo_5528541', name: 'Andrelon 2+2 gratis', count: 49, selected: false }]);
+
+  await stores.searchProducts('be', 'x', 0, 100, { sort: 'price-asc', priceMax: 3, inStock: true });
+  assert.equal(fetchMock.calls[1].url, 'https://www.kruidvat.be/nl/search/x:price-asc:salePriceRange:0%20TO%203:stockLevel:inStock');
+  await stores.searchProducts('tp', 'x', 0, 100, { brand: "Aunt Jackie's" });
+  assert.equal(fetchMock.calls[2].url, "https://www.trekpleister.nl/search/x:score:masterBrandName:Aunt%20Jackie's");
+});
+
+test('ICI: voorraad (incl. lage voorraad), merk en actie in de API-query', async () => {
+  const facets = [
+    { code: 'masterBrandName', values: [{ code: 'CHANEL', name: 'Chanel', count: 6 }] },
+    { code: 'offers', values: [{ code: 'GWP', name: 'Gratis Cadeau Bij Aankoop', count: 39 }] }
+  ];
+  const fetchMock = makeFetch([[/api\.iciparisxl\.nl/, () => mockResponse(apiSearch([], {}, facets))]]);
+  stores.net.fetch = fetchMock;
+  const r = await stores.searchProducts('ici', 'mascara', 0, 100, { inStock: true, brand: 'CHANEL', promo: 'GWP' });
+  assert.equal(new URL(fetchMock.calls[0].url).searchParams.get('query'),
+    'mascara:score:stockLevelStatus:INSTOCK:stockLevelStatus:LOWSTOCK:masterBrandName:CHANEL:offers:GWP');
+  assert.deepEqual(r.facets.brands, [{ code: 'CHANEL', name: 'Chanel', count: 6, selected: false }]);
+  assert.equal(r.facets.promos[0].code, 'GWP');
+});
+
+test('zonder facetten in het antwoord zijn de keuzelijsten leeg (geen fout)', async () => {
+  stores.net.fetch = makeFetch([[/kruidvat/, () => mockResponse(spartacusHtml([kvProduct()]))]]);
+  const r = await stores.searchProducts('nl', 'x');
+  assert.deepEqual(r.facets, { brands: [], promos: [] });
 });

@@ -136,3 +136,25 @@ test('zonder Telegram-ontvangers wordt de check overgeslagen', async () => {
   assert.equal(r.success, false);
   assert.match(r.error, /ontvangers/);
 });
+
+test('langdurige storing: de gratis-checker herinnert na een dag', async () => {
+  const outFile = path.join(dataDir, 'gratis-outages.json');
+  if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
+  const terug = (uren) => new Date(Date.now() - uren * 3600000).toISOString();
+  stores.net.fetch = makeFetch([telegramRoute(sent), [/kruidvat/, () => mockResponse('', { ok: false, status: 403 })]]);
+  await gratis.runGratisCheck(config(), false);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /elke 24 uur een herinnering/);
+  await gratis.runGratisCheck(config(), false);
+  assert.equal(sent.length, 1);
+
+  const o = JSON.parse(fs.readFileSync(outFile, 'utf8'));
+  o.nl.since = terug(50);
+  o.nl.lastNotified = terug(25);
+  fs.writeFileSync(outFile, JSON.stringify(o));
+  await gratis.runGratisCheck(config(), false);
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].text, /Gratis-checker: Kruidvat NL is nog steeds niet te controleren, sinds .* \(2 dagen\)/);
+  await gratis.runGratisCheck(config(), false);
+  assert.equal(sent.length, 2, 'daarna weer een dag stil');
+});

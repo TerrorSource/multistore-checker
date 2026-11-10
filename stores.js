@@ -25,6 +25,11 @@
 // De Kruidvat-/Trekpleister-API's geven server-side 0 producten terug; daar
 // blijft de HTML-route de bron.
 
+// Zoekfacetten van Kruidvat NL/BE en Trekpleister: voorraad, merk en de
+// lopende acties van de winkel (één waarde per actie, bv. "Andrelon 2+2
+// gratis").
+const KV_FACETS = { stock: 'stockLevel', inStock: ['inStock'], brand: 'masterBrandName', promo: 'promotionCategory' };
+
 const siteConfigs = {
   nl: {
     key: 'nl',
@@ -32,7 +37,8 @@ const siteConfigs = {
     domain: 'https://www.kruidvat.nl',
     searchBase: 'https://www.kruidvat.nl/search/',
     pageSize: 20,
-    priceFacet: 'salePriceRange'
+    priceFacet: 'salePriceRange',
+    facets: KV_FACETS
   },
   be: {
     key: 'be',
@@ -41,7 +47,10 @@ const siteConfigs = {
     // BE heeft een /nl/ locale-prefix (anders volgt een 301-redirect).
     searchBase: 'https://www.kruidvat.be/nl/search/',
     pageSize: 20,
-    priceFacet: 'salePriceRange'
+    priceFacet: 'salePriceRange',
+    // Kruidvat BE toont het voorraadfilter niet op de site, maar honoreert het
+    // wel (getest 2026-11).
+    facets: KV_FACETS
   },
   // Trekpleister: topPromotion bevat in de zoekresultaten alleen een actie-ID
   // en een plaatje; de actietekst (topPromotion.name) staat alleen op de
@@ -53,6 +62,7 @@ const siteConfigs = {
     searchBase: 'https://www.trekpleister.nl/search/',
     pageSize: 20,
     priceFacet: 'salePriceRange',
+    facets: KV_FACETS,
     promoTextFromPdp: true
   },
   // ICI PARIS XL wijkt op een paar punten af: productcodes hebben een
@@ -71,35 +81,48 @@ const siteConfigs = {
     pageSize: 100,
     // ICI's prijsfacet heet 'price' (interval op de actuele prijs).
     priceFacet: 'price',
+    // 'Lage voorraad' is gewoon bestelbaar en telt dus mee als op voorraad.
+    facets: { stock: 'stockLevelStatus', inStock: ['INSTOCK', 'LOWSTOCK'], brand: 'masterBrandName', promo: 'offers' },
     api: { base: 'https://api.iciparisxl.nl/api/v2/icinl3', lang: 'nl_NL' }
   }
 };
 
 // Akamai (alle A.S. Watson-sites) weigert te oude browserversies met een 403:
 // in november 2026 werd alles onder Chrome 143 geblokkeerd, waardoor een
-// vaste versie in de code na verloop van tijd álle checks stillegt. Daarom
-// rekenen we de actuele Chrome-major uit: Chrome 140 verscheen op 2 september
-// 2025 en sindsdien komt er elke 4 weken een nieuwe major. We blijven er één
-// onder (een gangbare, stabiele versie). Overschrijven kan met de
-// omgevingsvariabele CHROME_VERSION.
-const CHROME_BASE_VERSION = 140;
-const CHROME_BASE_DATE = Date.UTC(2025, 8, 2);
-const CHROME_CYCLE_MS = 28 * 24 * 60 * 60 * 1000;
-function currentChromeMajor(now = Date.now()) {
+// vaste versie in de code na verloop van tijd álle checks stillegt. De versie
+// in de headers komt daarom, in deze volgorde, uit:
+//   1. de omgevingsvariabele CHROME_VERSION (vaste keuze van de gebruiker);
+//   2. Google's openbare versielijst (refreshChromeVersion, dagelijks door
+//      server.js aangeroepen): de actuele stabiele Chrome;
+//   3. een berekening uit de datum, als vangnet zolang Google niet bereikbaar
+//      is. Chrome 153 verscheen op 26 augustus 2026 en sindsdien komt er elke
+//      2 weken een nieuwe major (tot dan elke 4 weken; de oude berekening liep
+//      daardoor in november 2026 al vier versies achter). We blijven er één
+//      onder: een gangbare, zeker al uitgebrachte versie.
+const CHROME_BASE_VERSION = 153;
+const CHROME_BASE_DATE = Date.UTC(2026, 7, 26);
+const CHROME_CYCLE_MS = 14 * 24 * 60 * 60 * 1000;
+function envChromeMajor() {
   const fromEnv = parseInt(process.env.CHROME_VERSION, 10);
-  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return (Number.isFinite(fromEnv) && fromEnv > 0) ? fromEnv : null;
+}
+function currentChromeMajor(now = Date.now()) {
+  const fromEnv = envChromeMajor();
+  if (fromEnv != null) return fromEnv;
   const cycles = Math.floor((now - CHROME_BASE_DATE) / CHROME_CYCLE_MS);
   return Math.max(CHROME_BASE_VERSION, CHROME_BASE_VERSION + cycles - 1);
 }
-const CHROME_MAJOR = currentChromeMajor();
 
 // De VOLLEDIGE headerset is verplicht: met alleen een User-Agent geeft
 // Akamai een 403. Inclusief sec-ch-ua en Sec-Fetch-* werkt het wel.
+// User-Agent en sec-ch-ua worden door setChromeMajor ingevuld; dit object
+// wordt ter plekke bijgewerkt, zodat ook modules die het al geïmporteerd
+// hebben (gratis.js) de nieuwe versie gebruiken.
 const BROWSER_HEADERS = {
-  'User-Agent': `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`,
+  'User-Agent': '',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
-  'sec-ch-ua': `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not.A/Brand";v="99"`,
+  'sec-ch-ua': '',
   'sec-ch-ua-mobile': '?0',
   'sec-ch-ua-platform': '"macOS"',
   'Upgrade-Insecure-Requests': '1',
@@ -108,6 +131,17 @@ const BROWSER_HEADERS = {
   'Sec-Fetch-Site': 'none',
   'Sec-Fetch-User': '?1'
 };
+
+// Actuele keuze: major, waar die vandaan komt ('env', 'google' of
+// 'berekend') en wanneer Google voor het laatst geraadpleegd is.
+const chrome = { major: 0, source: '', checkedAt: null, lastError: null };
+function setChromeMajor(major, source) {
+  chrome.major = major;
+  chrome.source = source;
+  BROWSER_HEADERS['User-Agent'] = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+  BROWSER_HEADERS['sec-ch-ua'] = `"Chromium";v="${major}", "Google Chrome";v="${major}", "Not.A/Brand";v="99"`;
+}
+setChromeMajor(currentChromeMajor(), envChromeMajor() != null ? 'env' : 'berekend');
 
 // Elke externe request krijgt een timeout: Node's fetch heeft er geen, en één
 // hangende verbinding zou anders het scrape-slot — en daarmee béide checkers —
@@ -146,6 +180,43 @@ async function withRetry(fn, { retries = 1, delayMs = RETRY_DELAY_MS } = {}) {
     }
   }
   throw lastErr;
+}
+
+// Haalt de actuele stabiele Chrome-versie op uit Google's openbare
+// versielijst en zet die in de browserheaders. Gooit nooit: lukt het niet
+// (geen internet, onverwacht antwoord), dan blijft de laatst bekende versie
+// staan, of de berekende als die inmiddels hoger is. Met CHROME_VERSION gezet
+// gebeurt er niets.
+const CHROME_VERSION_URL = 'https://versionhistory.googleapis.com/v1/chrome/platforms/mac/channels/stable/versions?pageSize=1&order_by=version%20desc';
+async function refreshChromeVersion() {
+  const fromEnv = envChromeMajor();
+  if (fromEnv != null) {
+    if (chrome.major !== fromEnv || chrome.source !== 'env') setChromeMajor(fromEnv, 'env');
+    return { ...chrome };
+  }
+  chrome.checkedAt = new Date().toISOString();
+  try {
+    const res = await net.fetch(CHROME_VERSION_URL, { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const version = data && Array.isArray(data.versions) && data.versions[0] && data.versions[0].version;
+    const major = parseInt(String(version || '').split('.')[0], 10);
+    // Een stabiele Chrome is nooit ouder dan de basis van de berekening; alles
+    // daarbuiten is een onverwacht antwoord.
+    if (!Number.isInteger(major) || major < CHROME_BASE_VERSION || major > 999) {
+      throw new Error(`onverwachte versie "${version}"`);
+    }
+    chrome.lastError = null;
+    setChromeMajor(major, 'google');
+  } catch (err) {
+    chrome.lastError = err.message;
+    const computed = currentChromeMajor();
+    if (computed > chrome.major) setChromeMajor(computed, 'berekend');
+  }
+  return { ...chrome };
+}
+function chromeInfo() {
+  return { ...chrome };
 }
 
 // Actie-categorieën voor filtering en weergave. 'verzending' (gratis
@@ -351,47 +422,96 @@ function mapSpartacusProduct(p, site) {
   };
 }
 
-// Sorteringen en prijsbereik gaan als Spartacus-query naar de winkel zelf,
-// zodat "X gevonden" en de paginering kloppen voor het hele resultaat (niet
-// alleen voor de geladen producten). Vorm: <term>:<sort>:<facet>:<min> TO <max>
-// (getest 2026-11 op alle vier de winkels). Zonder sortering en prijsbereik
-// blijft het de kale zoekterm, exact zoals voorheen.
+// Sortering en filters gaan als Spartacus-query naar de winkel zelf, zodat
+// "X gevonden" en de paginering kloppen voor het hele resultaat (niet alleen
+// voor de geladen producten). Vorm:
+//   <term>:<sort>:<facet>:<waarde>[:<facet>:<waarde>...]
+// met als facetten het prijsbereik ("<min> TO <max>"), de voorraad, het merk
+// en de actie van de winkel (getest 2026-11 op alle vier de winkels, ook met
+// merknamen als "Head & Shoulders" en "Aunt Jackie's"). Zonder sortering en
+// filters blijft het de kale zoekterm, exact zoals voorheen.
 const SORTS = ['relevance', 'price-asc', 'price-desc'];
 const SORT_CODE = { 'relevance': 'score', 'price-asc': 'price-asc', 'price-desc': 'price-desc' };
 const PRICE_MAX_OPEN = 100000;
+const FACET_VALUE_MAX = 120;
 
 // Normaliseert de zoekopties: onbekende sortering -> relevance, negatieve of
-// ongeldige prijzen -> geen grens, omgedraaide grenzen worden gewisseld.
+// ongeldige prijzen -> geen grens, omgedraaide grenzen worden gewisseld. Een
+// merk of actie met een dubbele punt zou de query-opbouw breken en wordt
+// genegeerd (de winkels gebruiken die niet in facetwaarden).
 function normalizeOptions(opts = {}) {
   const sort = SORTS.includes(opts.sort) ? opts.sort : 'relevance';
   const num = v => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) || Number(v) < 0) ? null : Number(v);
   let min = num(opts.priceMin);
   let max = num(opts.priceMax);
   if (min != null && max != null && min > max) [min, max] = [max, min];
-  return { sort, priceMin: min, priceMax: max };
+  const facetValue = v => {
+    const t = (v === null || v === undefined) ? '' : String(v).trim();
+    return (t && t.length <= FACET_VALUE_MAX && !t.includes(':')) ? t : null;
+  };
+  return {
+    sort, priceMin: min, priceMax: max,
+    inStock: opts.inStock === true || opts.inStock === 'true' || opts.inStock === '1',
+    brand: facetValue(opts.brand),
+    promo: facetValue(opts.promo)
+  };
 }
 
 function priceText(v) {
   return String(Math.round(v * 100) / 100);
 }
 
-function searchQuery(site, term, opts) {
-  const t = String(term).trim();
-  const { sort, priceMin, priceMax } = opts;
-  const hasPrice = priceMin != null || priceMax != null;
-  if (sort === 'relevance' && !hasPrice) return t;
-  let q = `${t}:${SORT_CODE[sort]}`;
-  if (hasPrice) q += `:${site.priceFacet}:${priceText(priceMin != null ? priceMin : 0)} TO ${priceText(priceMax != null ? priceMax : PRICE_MAX_OPEN)}`;
-  return q;
+// De delen ná de zoekterm: [sortering, facet, waarde, facet, waarde, ...], of
+// een lege lijst als er niets te sorteren of te filteren valt.
+function queryParts(site, opts) {
+  const { sort, priceMin, priceMax, inStock, brand, promo } = opts;
+  const f = [];
+  if (priceMin != null || priceMax != null) {
+    f.push(site.priceFacet, `${priceText(priceMin != null ? priceMin : 0)} TO ${priceText(priceMax != null ? priceMax : PRICE_MAX_OPEN)}`);
+  }
+  const facets = site.facets || {};
+  if (inStock && facets.stock) for (const v of facets.inStock) f.push(facets.stock, v);
+  if (brand && facets.brand) f.push(facets.brand, brand);
+  if (promo && facets.promo) f.push(facets.promo, promo);
+  if (sort === 'relevance' && f.length === 0) return [];
+  return [SORT_CODE[sort], ...f];
 }
 
-const API_HEADERS = {
-  ...BROWSER_HEADERS,
-  'Accept': 'application/json, text/plain, */*',
-  'Sec-Fetch-Dest': 'empty',
-  'Sec-Fetch-Mode': 'cors',
-  'Sec-Fetch-Site': 'same-site'
-};
+function searchQuery(site, term, opts) {
+  return [String(term).trim(), ...queryParts(site, opts)].join(':');
+}
+
+// De keuzes die de winkel bij deze zoekopdracht aanbiedt, voor de merk- en
+// actiekeuzelijst op het dashboard: [{ code, name, count, selected }].
+function facetValues(facets, code) {
+  const f = (Array.isArray(facets) ? facets : []).find(x => x && (x.code === code || x.name === code));
+  if (!f || !Array.isArray(f.values)) return [];
+  return f.values
+    .filter(v => v && v.code != null && String(v.code) !== '' && !String(v.code).includes(':'))
+    .map(v => ({ code: String(v.code), name: String(v.name || v.code), count: Number(v.count) || 0, selected: Boolean(v.selected) }));
+}
+
+function parseFacets(site, facets) {
+  const cfg = site.facets || {};
+  return {
+    brands: cfg.brand ? facetValues(facets, cfg.brand) : [],
+    promos: cfg.promo ? facetValues(facets, cfg.promo) : []
+  };
+}
+
+// De API-headers worden per verzoek uit BROWSER_HEADERS afgeleid, zodat een
+// bijgewerkte Chrome-versie ook hier meteen geldt.
+function apiHeaders(site) {
+  return {
+    ...BROWSER_HEADERS,
+    'Accept': 'application/json, text/plain, */*',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-site',
+    'Origin': site.domain,
+    'Referer': site.domain + '/'
+  };
+}
 
 // Eén pagina via de OCC-API (ICI).
 async function fetchSearchPageApi(site, term, page, opts) {
@@ -400,7 +520,7 @@ async function fetchSearchPageApi(site, term, page, opts) {
     currentPage: String(page), lang: site.api.lang, curr: 'EUR'
   });
   const res = await net.fetch(`${site.api.base}/products/search?${q}`, {
-    headers: { ...API_HEADERS, 'Origin': site.domain, 'Referer': site.domain + '/' }
+    headers: apiHeaders(site)
   });
   if (!res.ok) throw new Error(`${site.displayName}: HTTP ${res.status}`);
   let data;
@@ -418,7 +538,8 @@ async function fetchSearchPageApi(site, term, page, opts) {
     total: pag.totalResults || products.length,
     page: Number.isInteger(pag.currentPage) ? pag.currentPage : page,
     pageSize: pag.pageSize || site.pageSize,
-    totalPages: pag.totalPages || (products.length ? 1 : 0)
+    totalPages: pag.totalPages || (products.length ? 1 : 0),
+    facets: parseFacets(site, data.facets)
   };
 }
 
@@ -427,11 +548,10 @@ async function fetchSearchPageApi(site, term, page, opts) {
 async function fetchSearchPage(site, term, page = 0, options = {}) {
   const opts = normalizeOptions(options);
   if (site.api) return fetchSearchPageApi(site, term, page, opts);
-  // De term wordt ge-encodeerd; de dubbele punten en het bereik ("2.5 TO 5")
-  // van sortering/prijsfilter staan letterlijk in het pad (spatie als %20).
+  // De term en elk deel van sortering/filters worden ge-encodeerd (spatie als
+  // %20, "&" als %26); de dubbele punten ertussen staan letterlijk in het pad.
   const t = encodeURIComponent(String(term).trim());
-  const q = searchQuery(site, term, opts);
-  const suffix = q === String(term).trim() ? '' : q.slice(String(term).trim().length).replace(/ /g, '%20');
+  const suffix = queryParts(site, opts).map(part => ':' + encodeURIComponent(part)).join('');
   let url = site.searchBase + t + suffix;
   if (page > 0) url += `?currentPage=${page}`;
 
@@ -455,7 +575,8 @@ async function fetchSearchPage(site, term, page = 0, options = {}) {
     total: pag.totalResults || model.products.length,
     page: Number.isInteger(pag.currentPage) ? pag.currentPage : page,
     pageSize: pag.pageSize || site.pageSize,
-    totalPages: pag.totalPages || 1
+    totalPages: pag.totalPages || 1,
+    facets: parseFacets(site, model.facets)
   };
 }
 
@@ -545,12 +666,14 @@ async function searchProducts(siteKey, term, start = 0, limit = 100, options = {
   let total = 0;
   let nextStart = start;
   let exhausted = false;
+  let facets = null;
 
   for (let n = 0; products.length < limit; n++) {
     if (n > 0) await delay(settings.pageDelayMs);
     const r = await fetchSearchPage(site, term, page, opts);
     total = r.total;
     pageSize = r.pageSize || pageSize;
+    if (!facets) facets = r.facets || null;
 
     const fresh = r.products.filter(p => !seen.has(p.code));
     if (r.products.length === 0 || (n > 0 && fresh.length === 0)) { exhausted = true; break; }
@@ -580,7 +703,12 @@ async function searchProducts(siteKey, term, start = 0, limit = 100, options = {
     hasMore: !exhausted && nextStart < total,
     sort: opts.sort,
     priceMin: opts.priceMin,
-    priceMax: opts.priceMax
+    priceMax: opts.priceMax,
+    inStock: opts.inStock,
+    brand: opts.brand,
+    promo: opts.promo,
+    // Merken en acties die de winkel bij deze zoekopdracht aanbiedt.
+    facets: facets || { brands: [], promos: [] }
   };
 }
 
@@ -602,10 +730,14 @@ module.exports = {
   SORTS,
   classifyPromo,
   normalizeOptions,
+  searchQuery,
   // Herbruikbaar voor andere scrapers (o.a. gratis-producten-checker) en tests:
   BROWSER_HEADERS,
-  CHROME_MAJOR,
+  get CHROME_MAJOR() { return chrome.major; },
   currentChromeMajor,
+  refreshChromeVersion,
+  chromeInfo,
+  CHROME_VERSION_URL,
   FETCH_TIMEOUT_MS,
   net,
   settings,

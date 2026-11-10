@@ -40,6 +40,16 @@ const UPDATE_CHECK_ENABLED = String(process.env.UPDATE_CHECK || 'true').toLowerC
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_CHECK_INITIAL_DELAY_MS = 30 * 1000;
 
+// Browserversie: de winkels (Akamai) weigeren te oude Chrome-versies, dus de
+// versie in de browserheaders wordt eens per dag bij Google opgehaald (zie
+// stores.refreshChromeVersion). Uitschakelen met CHROME_VERSION_CHECK=false
+// (dan geldt de berekende versie) of vastzetten met CHROME_VERSION.
+const CHROME_CHECK_ENABLED = String(process.env.CHROME_VERSION_CHECK || 'true').toLowerCase() !== 'false';
+const CHROME_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// Na een HTTP 403 van een winkel meteen opnieuw kijken, maar hooguit eens per
+// uur: een 403 is hét signaal van een te oude versie.
+const CHROME_RECHECK_AFTER_403_MS = 60 * 60 * 1000;
+
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -205,6 +215,7 @@ function recordSite(siteKey, ok, error = null, source = '') {
   if (ok) h.lastOk = now;
   else { h.lastError = (source ? source + ': ' : '') + (error || 'onbekende fout'); h.lastErrorAt = now; }
   saveStateSoon();
+  if (!ok && /HTTP 403/.test(String(error || ''))) recheckChromeAfter403();
 }
 
 function loadState() {
@@ -244,6 +255,43 @@ function addLog(message) {
 loadState();
 // Telegram-fouten uit de watcher/gratis-checker in het dashboard-log.
 watcher.setLogger(addLog);
+
+// --- Browserversie ----------------------------------------------------------------------
+
+// Haalt de actuele Chrome-versie op en logt alleen als er iets verandert.
+let chromeCheckBusy = false;
+async function updateChromeVersion() {
+  if (!CHROME_CHECK_ENABLED || chromeCheckBusy) return stores.chromeInfo();
+  chromeCheckBusy = true;
+  try {
+    const before = stores.chromeInfo();
+    const after = await stores.refreshChromeVersion();
+    if (after.major !== before.major || after.source !== before.source) {
+      const bron = { env: 'ingesteld met CHROME_VERSION', google: 'actuele versie volgens Google', berekend: 'berekend uit de datum' }[after.source] || after.source;
+      addLog(`Browserversie voor de winkels: Chrome ${after.major} (${bron}; was ${before.major}).`);
+    }
+    if (after.lastError && after.lastError !== before.lastError) {
+      addLog(`Chrome-versie ophalen bij Google mislukt (${after.lastError}); Chrome ${after.major} blijft in gebruik.`);
+    }
+    return after;
+  } finally {
+    chromeCheckBusy = false;
+  }
+}
+
+function recheckChromeAfter403() {
+  if (!CHROME_CHECK_ENABLED) return;
+  const info = stores.chromeInfo();
+  if (info.source === 'env') return;
+  if (info.checkedAt && Date.now() - new Date(info.checkedAt).getTime() < CHROME_RECHECK_AFTER_403_MS) return;
+  updateChromeVersion().catch(() => {});
+}
+
+function setupChromeVersionCheck() {
+  if (!CHROME_CHECK_ENABLED) return;
+  updateChromeVersion().catch(() => {});
+  setInterval(() => updateChromeVersion().catch(() => {}), CHROME_CHECK_INTERVAL_MS).unref();
+}
 
 // --- Update-check -----------------------------------------------------------------------
 
@@ -516,12 +564,16 @@ app.get('/api/search', async (req, res) => {
   const start = Math.max(0, parseInt(req.query.start, 10) || 0);
   if (!term) return res.json({ success: false, error: 'Geen zoekterm opgegeven' });
   if (!KNOWN_SITES.includes(site)) return res.json({ success: false, error: `Onbekende site: ${site}` });
-  // Sortering en prijsbereik gaan naar de winkel zelf (zie stores.js);
-  // ongeldige waarden worden daar genegeerd.
+  // Sortering, prijsbereik, voorraad, merk en actie gaan naar de winkel zelf
+  // (zie stores.js); ongeldige waarden worden daar genegeerd.
+  const text = v => (typeof v === 'string' && v.trim() !== '') ? v.trim() : null;
   const options = {
     sort: req.query.sort,
     priceMin: req.query.min !== undefined && req.query.min !== '' ? String(req.query.min).replace(',', '.') : null,
-    priceMax: req.query.max !== undefined && req.query.max !== '' ? String(req.query.max).replace(',', '.') : null
+    priceMax: req.query.max !== undefined && req.query.max !== '' ? String(req.query.max).replace(',', '.') : null,
+    inStock: req.query.stock === '1',
+    brand: text(req.query.brand),
+    promo: text(req.query.promo)
   };
 
   try {
@@ -671,6 +723,7 @@ app.get('/api/status', (req, res) => {
     },
     telegram: watcher.getTelegramState(),
     update: updateInfo,
+    chrome: (({ major, source, checkedAt }) => ({ major, source, checkedAt }))(stores.chromeInfo()),
     sites: Object.fromEntries(KNOWN_SITES.map(k => {
       const h = siteHealth[k] || {};
       const state = !h.lastOk && !h.lastErrorAt ? 'unknown'
@@ -692,7 +745,8 @@ if (require.main === module) {
     setupScheduler(INITIAL_CHECK_DELAY_MS);
     setupGratisScheduler(INITIAL_GRATIS_DELAY_MS);
     setupUpdateCheck();
+    setupChromeVersionCheck();
   });
 }
 
-module.exports = { app, migrateV1Config, loadConfig, parseSemver, compareSemver, checkForUpdate, updateInfo };
+module.exports = { app, migrateV1Config, loadConfig, parseSemver, compareSemver, checkForUpdate, updateInfo, updateChromeVersion };

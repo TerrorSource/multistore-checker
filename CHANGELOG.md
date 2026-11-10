@@ -1,5 +1,53 @@
 # Changelog
 
+## [2.12.0] — 2026-11-10
+
+### Browserversie komt nu van Google
+- **De Chrome-versie in de browserheaders wordt dagelijks opgehaald** uit
+  Google's openbare versielijst (`versionhistory.googleapis.com`), bij de
+  start en daarna elke 24 uur. De winkels (Akamai) weigeren te oude versies
+  met een 403; de berekening uit 2.9.0 ging uit van een nieuwe Chrome per
+  4 weken, maar Chrome verschijnt sinds augustus 2026 elke 2 weken, waardoor
+  de app in november al vier versies achterliep (154 tegenover 158).
+- De berekening blijft als vangnet als Google niet bereikbaar is, en is
+  bijgesteld naar het tweewekelijkse ritme. `CHROME_VERSION` zet de versie
+  nog steeds vast; `CHROME_VERSION_CHECK=false` schakelt het ophalen uit.
+- Na een HTTP 403 van een winkel wordt de versie meteen opnieuw opgehaald
+  (hooguit eens per uur). De gebruikte versie staat in de voettekst van het
+  dashboard en in `/api/status` (`chrome`); een wijziging komt in het log.
+
+### Zoeken: voorraad, merk en actie via de winkel
+- **Het voorraadfilter past de winkel nu zelf toe.** Met het vinkje "Toon ook
+  producten die niet op voorraad zijn" uit zoekt de winkel alleen in wat op
+  voorraad is, dus "X gevonden" en "Meer laden" kloppen (voorheen werden
+  uitverkochte producten alleen uit de geladen 100 weggelaten). Bij ICI telt
+  "lage voorraad" als op voorraad.
+- **Nieuw: filter op merk** en **op actie van de winkel** (bv. "Andrelon 2+2
+  gratis"), elk als keuzelijst met de merken en acties die de winkel bij deze
+  zoekopdracht aanbiedt, met aantallen. Combineerbaar met prijs en
+  sortering; "Filters wissen" zet prijs, merk en actie terug. Een nieuwe
+  zoekterm of andere winkel wist merk en actie.
+- Het filter op **soort actie** (1+1, 2e halve prijs, % korting, …) blijft
+  werken op de geladen resultaten: die indeling maakt de app zelf, de
+  winkels kennen hem niet.
+- Getest op alle vier de winkels, ook met merknamen als "Head & Shoulders"
+  en "Aunt Jackie's". Kruidvat BE toont het voorraadfilter niet op de eigen
+  site, maar honoreert het wel.
+
+### Storingen
+- **Herinnering bij een langdurige storing**: blijft een winkel onbereikbaar,
+  dan volgt na 24 uur een herinnering met sinds wanneer en de laatste fout,
+  en daarna elke 24 uur opnieuw — zowel voor de watchlist als voor de
+  gratis-checker. Voorheen bleef het na de eerste melding stil, ook als een
+  winkel dagen plat lag. Herstel blijft stil.
+- **Winkelstatus op elke pagina**: de regel "gelukt om … / storing sinds …"
+  staat nu ook op "Gevolgde producten" en "Instellingen".
+
+### Tests
+- 63 tests (was 55): Chrome-versie van Google (inclusief fout, onzinnig
+  antwoord en `CHROME_VERSION`), de filters voor voorraad, merk en actie per
+  winkel, de keuzelijsten, en de herinnering bij een langdurige storing.
+
 ## [2.11.0] — 2026-11-09
 
 ### Stille storingen worden nu gemeld

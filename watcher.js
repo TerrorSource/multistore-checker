@@ -20,7 +20,10 @@ const CHUNK_LIMIT = 3500;
 
 // Instelbaar (o.a. door tests): pauze tussen requests naar de winkels, om niet
 // als bot geblokkeerd te raken.
-const settings = { requestDelayMs: 2000 };
+// outageReminderMs: zolang een winkel onbereikbaar blijft, komt er na deze
+// tijd een herinnering (en daarna steeds opnieuw), zodat een storing van
+// dagen niet na één bericht stil blijft. Geldt ook voor de gratis-checker.
+const settings = { requestDelayMs: 2000, outageReminderMs: 24 * 60 * 60 * 1000 };
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -45,7 +48,7 @@ function setLogger(fn) { logger = fn; }
 // --- Gemelde acties -------------------------------------------------------
 
 // Structuur: { "<site>:<code>": { promoKey, headline, notifiedAt },
-//              "_outage:<site>": { since, error } }
+//              "_outage:<site>": { since, error, lastNotified } }
 function loadNotified() {
   const { data } = readJson(NOTIFIED_FILE, {});
   return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
@@ -57,6 +60,31 @@ function saveNotified(notified) {
   } catch (err) {
     logger(`notified.json opslaan mislukt: ${err.message}`);
   }
+}
+
+// --- Storingsherinnering --------------------------------------------------
+
+// Is het tijd voor een herinnering over een lopende storing? Telt vanaf de
+// laatste melding (bij storingen van vóór 2.12.0: vanaf het begin).
+function outageReminderDue(entry, now = Date.now()) {
+  if (!entry) return false;
+  const last = new Date(entry.lastNotified || entry.since).getTime();
+  return Number.isFinite(last) && now - last >= settings.outageReminderMs;
+}
+
+// "sinds 09-11 14:30 (26 uur)" / "(3 dagen)".
+function outageAge(sinceIso, now = Date.now()) {
+  const since = new Date(sinceIso);
+  if (isNaN(since.getTime())) return 'sinds onbekende tijd';
+  const hours = Math.max(1, Math.round((now - since.getTime()) / 3600000));
+  const duration = hours < 48 ? `${hours} uur` : `${Math.floor(hours / 24)} dagen`;
+  const when = since.toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return `sinds ${when} (${duration})`;
+}
+
+function reminderEvery() {
+  const hours = Math.round(settings.outageReminderMs / 3600000);
+  return hours >= 1 ? `${hours} uur` : 'korte tijd';
 }
 
 // Unieke sleutel voor de actieve aanbieding van een product, of null als er
@@ -225,13 +253,26 @@ async function runCheck(config, watchlist, isManual = false) {
   for (const siteKey of Object.keys(perSite)) {
     const okey = OUTAGE_PREFIX + siteKey;
     if (outageSites.has(siteKey)) {
+      const nowIso = new Date().toISOString();
       if (!notified[okey]) {
-        notified[okey] = { since: new Date().toISOString(), error: perSite[siteKey].lastError };
+        notified[okey] = { since: nowIso, error: perSite[siteKey].lastError, lastNotified: nowIso };
         if (targets.length > 0) {
           await broadcast(targets,
             `⚠️ ${siteName(siteKey)} is onbereikbaar (${perSite[siteKey].lastError}); `
             + `${perSite[siteKey].total} gevolgd(e) product(en) konden niet gecheckt worden. `
-            + `Je krijgt hierover geen nieuwe melding tot de site weer bereikbaar is geweest.`);
+            + `Blijft dat zo, dan krijg je elke ${reminderEvery()} een herinnering.`);
+        }
+      } else {
+        // Lopende storing: laatste fout bijhouden en af en toe herinneren.
+        notified[okey].error = perSite[siteKey].lastError;
+        if (outageReminderDue(notified[okey])) {
+          notified[okey].lastNotified = nowIso;
+          if (targets.length > 0) {
+            await broadcast(targets,
+              `⏰ ${siteName(siteKey)} is nog steeds onbereikbaar, ${outageAge(notified[okey].since)}. `
+              + `Laatste fout: ${perSite[siteKey].lastError}. `
+              + `${perSite[siteKey].total} gevolgd(e) product(en) worden niet gecheckt.`);
+          }
         }
       }
     } else if (notified[okey]) {
@@ -360,6 +401,9 @@ module.exports = {
   escapeHTML,
   escapeAttr,
   settings,
+  outageReminderDue,
+  outageAge,
+  reminderEvery,
   setLogger,
   getTelegramState
 };

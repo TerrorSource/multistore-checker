@@ -58,6 +58,21 @@ function applyStatus(s) {
     }
   }
 
+  // Welke Chrome-versie de app richting de winkels gebruikt (handig bij een
+  // HTTP 403: de winkels weigeren te oude versies).
+  const c = document.getElementById('chromeNotice');
+  if (c) {
+    if (s.chrome && s.chrome.major) {
+      const bron = { env: 'vast ingesteld', google: 'actuele versie volgens Google', berekend: 'berekend uit de datum' }[s.chrome.source] || '';
+      c.textContent = ` · browserheaders: Chrome ${s.chrome.major}`;
+      c.title = bron + (s.chrome.checkedAt ? ` — gecontroleerd ${formatTime(s.chrome.checkedAt)}` : '');
+    } else {
+      c.textContent = '';
+    }
+  }
+
+  renderSiteHealth(s.sites);
+
   const w = document.getElementById('telegramWarning');
   if (w) {
     const e = s.telegram && s.telegram.lastError;
@@ -68,6 +83,24 @@ function applyStatus(s) {
       w.hidden = true;
     }
   }
+}
+
+// Status per winkel (op elke pagina met een #siteHealth-element): groen =
+// laatste verzoek gelukt, rood = storing (met reden en sinds wanneer), grijs =
+// nog niet geprobeerd sinds de start.
+function renderSiteHealth(sites) {
+  const el = document.getElementById('siteHealth');
+  if (!el) return;
+  if (!sites) { el.hidden = true; return; }
+  const items = Object.values(sites).map(h => {
+    if (h.state === 'error') {
+      return `<span class="site-state error" title="${esc(h.lastError || '')}">● ${esc(h.name)}: storing sinds ${formatTime(h.lastErrorAt)}${h.lastOk ? ` (laatst gelukt ${formatTime(h.lastOk)})` : ''}</span>`;
+    }
+    if (h.state === 'ok') return `<span class="site-state ok">● ${esc(h.name)}: gelukt ${formatTime(h.lastOk)}</span>`;
+    return `<span class="site-state unknown">● ${esc(h.name)}: nog niet gecontroleerd</span>`;
+  });
+  el.innerHTML = '<span class="site-health-label">Winkels:</span> ' + items.join('');
+  el.hidden = false;
 }
 
 // Voor pagina's zonder eigen status-poll.

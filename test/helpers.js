@@ -14,7 +14,7 @@ function useTempDataDir() {
 }
 
 // Spartacus-zoekpagina: app-state JSON met de eigen escaping (&q; etc.).
-function spartacusHtml(products, pagination = {}) {
+function spartacusHtml(products, pagination = {}, facets = []) {
   const state = {
     search: {
       searchModel: {
@@ -26,7 +26,7 @@ function spartacusHtml(products, pagination = {}) {
           totalResults: products.length,
           ...pagination
         },
-        facets: []
+        facets
       }
     }
   };
@@ -51,9 +51,10 @@ function kvProduct(overrides = {}) {
 }
 
 // OCC-API-zoekantwoord (zoals ICI PARIS XL dat levert).
-function apiSearch(products, pagination = {}) {
+function apiSearch(products, pagination = {}, facets = []) {
   return {
     products,
+    facets,
     pagination: { currentPage: 0, pageSize: 100, totalPages: products.length ? 1 : 0, totalResults: products.length, ...pagination }
   };
 }
